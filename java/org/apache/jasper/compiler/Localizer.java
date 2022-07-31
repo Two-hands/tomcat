@@ -16,6 +16,8 @@
  */
 package org.apache.jasper.compiler;
 
+import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.util.MissingResourceException;
 import java.util.ResourceBundle;
@@ -59,6 +61,11 @@ public class Localizer {
             }
         } catch (MissingResourceException e) {
         }
+
+        //增加解决乱码的代码段
+        //start
+        errMsg = new String(errMsg.getBytes(StandardCharsets.ISO_8859_1),StandardCharsets.UTF_8);
+        //end
         return errMsg;
     }
 

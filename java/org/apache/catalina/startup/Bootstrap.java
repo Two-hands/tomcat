@@ -58,6 +58,11 @@ public final class Bootstrap {
     private static final File catalinaBaseFile;
     private static final File catalinaHomeFile;
 
+    /**
+     *   正则：匹配首尾是"，中间是任意个数的任意字符（除开"）的字符串
+     *        或者
+     *        匹配第一个字符不是,的任意个数的任意字符的字符串
+     */
     private static final Pattern PATH_PATTERN = Pattern.compile("(\"[^\"]*\")|(([^,])*)");
 
     static {

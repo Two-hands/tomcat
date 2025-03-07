@@ -47,3 +47,5 @@ modules/jdbc-pool/bin
 modules/jdbc-pool/includes
 webapps/docs/jdbc-pool.xml
 target/**
+home/logs/**
+home/work/**

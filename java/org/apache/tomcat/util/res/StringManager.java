@@ -16,6 +16,7 @@
  */
 package org.apache.tomcat.util.res;
 
+import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.util.Enumeration;
 import java.util.Hashtable;
@@ -145,6 +146,12 @@ public class StringManager {
             //      simply return null.  Calling code can then do
             //      a null check.
             str = null;
+        }
+
+        if (null != str){
+            try {
+                str = new String(str.getBytes(StandardCharsets.ISO_8859_1),StandardCharsets.UTF_8);
+            }catch (Exception ignore){}
         }
 
         return str;

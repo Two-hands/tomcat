@@ -16,21 +16,15 @@
  */
 package org.apache.tomcat.util.net;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.ByteChannel;
-import java.nio.channels.GatheringByteChannel;
-import java.nio.channels.ScatteringByteChannel;
-import java.nio.channels.Selector;
-import java.nio.channels.SocketChannel;
-
 import org.apache.tomcat.util.net.NioEndpoint.NioSocketWrapper;
 import org.apache.tomcat.util.res.StringManager;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.*;
+
 /**
- * Base class for a SocketChannel wrapper used by the endpoint.
- * This way, logic for an SSL socket channel remains the same as for
- * a non SSL, making sure we don't need to code for any exception cases.
+ * SocketChannel的包装类
  */
 public class NioChannel implements ByteChannel, ScatteringByteChannel, GatheringByteChannel {
 
@@ -39,6 +33,8 @@ public class NioChannel implements ByteChannel, ScatteringByteChannel, Gathering
     protected static final ByteBuffer emptyBuf = ByteBuffer.allocate(0);
 
     protected final SocketBufferHandler bufHandler;
+
+    //真正的非阻塞Socket通道
     protected SocketChannel sc = null;
     protected NioSocketWrapper socketWrapper = null;
 

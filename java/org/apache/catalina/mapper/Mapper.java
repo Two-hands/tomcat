@@ -16,28 +16,19 @@
  */
 package org.apache.catalina.mapper;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-
-import javax.servlet.http.MappingMatch;
-
-import org.apache.catalina.Context;
-import org.apache.catalina.Host;
-import org.apache.catalina.WebResource;
-import org.apache.catalina.WebResourceRoot;
-import org.apache.catalina.Wrapper;
+import org.apache.catalina.*;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.buf.Ascii;
 import org.apache.tomcat.util.buf.CharChunk;
 import org.apache.tomcat.util.buf.MessageBytes;
 import org.apache.tomcat.util.res.StringManager;
+
+import javax.servlet.http.MappingMatch;
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Mapper, which implements the servlet API mapping rules (which are derived
@@ -745,9 +736,14 @@ public final class Mapper {
             throw new AssertionError();
         }
 
-        // Virtual host mapping
+        //1、通过解析请求行或请求头得到的host去Mapper.hosts中寻找匹配的虚拟主机（设置mappingData.host）
+        //确定mappedHost
         MappedHost[] hosts = this.hosts;
+
+        //获取host映射...
         MappedHost mappedHost = exactFindIgnoreCase(hosts, host);
+
+        //虚拟主机匹配失败，尝试使用默认虚拟主机（如果有默认虚拟主机时）
         if (mappedHost == null) {
             // Note: Internally, the Mapper does not use the leading * on a
             //       wildcard host. This is to allow this shortcut.
@@ -778,9 +774,11 @@ public final class Mapper {
 
         uri.setLimit(-1);
 
-        // Context mapping
+        // 2、通过解析请求行中的URI去已匹配的虚拟主机下面的mappedHost.contextList中寻找匹配WEB应用上下文（设置mappingData.contextPath）
+        //确定context
         ContextList contextList = mappedHost.contextList;
         MappedContext[] contexts = contextList.contexts;
+        // 获取WEB应用映射...
         int pos = find(contexts, uri);
         if (pos == -1) {
             return;
@@ -847,7 +845,7 @@ public final class Mapper {
         mappingData.context = contextVersion.object;
         mappingData.contextSlashCount = contextVersion.slashCount;
 
-        // Wrapper mapping
+        // 3、通过解析请求行中的URI去已匹配的context中寻找匹配剩下URI的Wrapper[含Servlet]（设置mappingData.wrapperPath）
         if (!contextVersion.isPaused()) {
             internalMapWrapper(contextVersion, uri, mappingData);
         }

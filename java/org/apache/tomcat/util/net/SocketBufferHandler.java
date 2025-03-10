@@ -16,10 +16,10 @@
  */
 package org.apache.tomcat.util.net;
 
+import org.apache.tomcat.util.buf.ByteBufferUtils;
+
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
-
-import org.apache.tomcat.util.buf.ByteBufferUtils;
 
 public class SocketBufferHandler {
 
@@ -52,9 +52,11 @@ public class SocketBufferHandler {
             boolean direct) {
         this.direct = direct;
         if (direct) {
+            //分配直接读、写内存（DirectByteBuffer）
             readBuffer = ByteBuffer.allocateDirect(readBufferSize);
             writeBuffer = ByteBuffer.allocateDirect(writeBufferSize);
         } else {
+            //分配堆读、写内存（HeapByteBuffer）
             readBuffer = ByteBuffer.allocate(readBufferSize);
             writeBuffer = ByteBuffer.allocate(writeBufferSize);
         }

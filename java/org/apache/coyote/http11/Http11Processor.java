@@ -16,35 +16,8 @@
  */
 package org.apache.coyote.http11;
 
-import java.io.IOException;
-import java.io.InterruptedIOException;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.regex.Pattern;
-
-import javax.servlet.http.HttpServletResponse;
-
-import org.apache.coyote.AbstractProcessor;
-import org.apache.coyote.ActionCode;
-import org.apache.coyote.Adapter;
-import org.apache.coyote.ContinueResponseTiming;
-import org.apache.coyote.ErrorState;
-import org.apache.coyote.Request;
-import org.apache.coyote.RequestInfo;
-import org.apache.coyote.UpgradeProtocol;
-import org.apache.coyote.UpgradeToken;
-import org.apache.coyote.http11.filters.BufferedInputFilter;
-import org.apache.coyote.http11.filters.ChunkedInputFilter;
-import org.apache.coyote.http11.filters.ChunkedOutputFilter;
-import org.apache.coyote.http11.filters.GzipOutputFilter;
-import org.apache.coyote.http11.filters.IdentityInputFilter;
-import org.apache.coyote.http11.filters.IdentityOutputFilter;
-import org.apache.coyote.http11.filters.SavedRequestInputFilter;
-import org.apache.coyote.http11.filters.VoidInputFilter;
-import org.apache.coyote.http11.filters.VoidOutputFilter;
+import org.apache.coyote.*;
+import org.apache.coyote.http11.filters.*;
 import org.apache.coyote.http11.upgrade.InternalHttpUpgradeHandler;
 import org.apache.coyote.http11.upgrade.UpgradeApplicationBufferHandler;
 import org.apache.juli.logging.Log;
@@ -58,13 +31,18 @@ import org.apache.tomcat.util.http.parser.HttpParser;
 import org.apache.tomcat.util.http.parser.TokenList;
 import org.apache.tomcat.util.log.UserDataHelper;
 import org.apache.tomcat.util.net.AbstractEndpoint.Handler.SocketState;
-import org.apache.tomcat.util.net.ApplicationBufferHandler;
-import org.apache.tomcat.util.net.SSLSupport;
-import org.apache.tomcat.util.net.SendfileDataBase;
-import org.apache.tomcat.util.net.SendfileKeepAliveState;
-import org.apache.tomcat.util.net.SendfileState;
-import org.apache.tomcat.util.net.SocketWrapperBase;
+import org.apache.tomcat.util.net.*;
 import org.apache.tomcat.util.res.StringManager;
+
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 public class Http11Processor extends AbstractProcessor {
 
@@ -268,8 +246,10 @@ public class Http11Processor extends AbstractProcessor {
 
             // Parsing the request header
             try {
-                if (!inputBuffer.parseRequestLine(keptAlive, protocol.getConnectionTimeout(),
-                        protocol.getKeepAliveTimeout())) {
+                // 1、inputBuffer.parseRequestLine()   ————  解析请求行，包括请求方式、URI、协议类型及版本
+                if (!inputBuffer.parseRequestLine(keptAlive, protocol.getConnectionTimeout(),protocol.getKeepAliveTimeout())) {
+
+                    //解析失败....
                     if (inputBuffer.getParsingRequestLinePhase() == -1) {
                         return SocketState.UPGRADING;
                     } else if (handleIncompleteRequestLineRead()) {
@@ -277,9 +257,8 @@ public class Http11Processor extends AbstractProcessor {
                     }
                 }
 
-                // Process the Protocol component of the request line
-                // Need to know if this is an HTTP 0.9 request before trying to
-                // parse headers.
+                //检测解析的请求行中的协议信息，便于决定后面如何解析请求头...
+                //设置http09、http11、keepAlive变量的值
                 prepareRequestProtocol();
 
                 if (protocol.isPaused()) {
@@ -290,10 +269,13 @@ public class Http11Processor extends AbstractProcessor {
                     keptAlive = true;
                     // Set this every time in case limit has been changed via JMX
                     request.getMimeHeaders().setLimit(protocol.getMaxHeaderCount());
-                    // Don't parse headers for HTTP/0.9
+
+                    //不解析HTTP/0.9版本的请求头，即http09=false才解析请求头
+                    //2、inputBuffer.parseHeaders()   ————   解析请求头（多个k-v键值对）
                     if (!http09 && !inputBuffer.parseHeaders()) {
                         // We've read part of the request, don't recycle it
                         // instead associate it with the socket
+                        //解析请求头失败....
                         openSocket = true;
                         readComplete = false;
                         break;
@@ -372,6 +354,7 @@ public class Http11Processor extends AbstractProcessor {
                 // Setting up filters, and parse some request headers
                 rp.setStage(org.apache.coyote.Constants.STAGE_PREPARE);
                 try {
+                    //对解析完成的请求头数据进行校验和处理
                     prepareRequest();
                 } catch (Throwable t) {
                     ExceptionUtils.handleThrowable(t);
@@ -396,7 +379,16 @@ public class Http11Processor extends AbstractProcessor {
             if (getErrorState().isIoAllowed()) {
                 try {
                     rp.setStage(org.apache.coyote.Constants.STAGE_SERVICE);
+
+
+
+
+                    //** 调用Adapter继续处理请求：将tomcat内置的request、response包装
+                    //   成HttpServletRequest和HttpServletResponse进行请求处理 **
                     getAdapter().service(request, response);
+
+
+
                     // Handle when the response was committed before a serious
                     // error occurred.  Throwing a ServletException should both
                     // set the status to 500 and set the errorException.
@@ -639,7 +631,7 @@ public class Http11Processor extends AbstractProcessor {
 
         MimeHeaders headers = request.getMimeHeaders();
 
-        // Check connection header
+        // 确认请求头中的connection的value（一般是keep-alive）
         MessageBytes connectionValueMB = headers.getValue(Constants.CONNECTION);
         if (connectionValueMB != null && !connectionValueMB.isNull()) {
             Set<String> tokens = new HashSet<>();
@@ -655,7 +647,7 @@ public class Http11Processor extends AbstractProcessor {
             prepareExpectation(headers);
         }
 
-        // Check user-agent header
+        // 确认请求头中的user-agent的value
         Pattern restrictedUserAgents = protocol.getRestrictedUserAgentsPattern();
         if (restrictedUserAgents != null && (http11 || keepAlive)) {
             MessageBytes userAgentValueMB = headers.getValue("user-agent");
@@ -671,7 +663,7 @@ public class Http11Processor extends AbstractProcessor {
         }
 
 
-        // Check host header
+        // 确认请求头中的host的值（若当前为HTTP/1.1，是不允许没有host的value值）
         MessageBytes hostValueMB = null;
         try {
             hostValueMB = headers.getUniqueValue("host");
@@ -683,17 +675,18 @@ public class Http11Processor extends AbstractProcessor {
             badRequest("http11processor.request.noHostHeader");
         }
 
-        // Check for an absolute-URI less the query string which has already
-        // been removed during the parsing of the request line
+        // 确认请求行中的URI信息，若以http开头，校验其格式合法性，并重新设置URI信息（去掉前面的schema）
+        // 若是HTTP/1.1且header中的host的值与请求行中的URI中解析的host值不同，替换请求头的host的value
+        // 若不是HTTP/1.1且请求头中没有host的键值对，默认添加上
         ByteChunk uriBC = request.requestURI().getByteChunk();
         byte[] uriB = uriBC.getBytes();
         if (uriBC.startsWithIgnoreCase("http", 0)) {
             int pos = 4;
-            // Check for https
+            //开头是http或https
             if (uriBC.startsWithIgnoreCase("s", pos)) {
                 pos++;
             }
-            // Next 3 characters must be "://"
+            // 紧接着的3个字符必须是"://"
             if (uriBC.startsWith("://", pos)) {
                 pos += 3;
                 int uriBCStart = uriBC.getStart();
@@ -786,10 +779,10 @@ public class Http11Processor extends AbstractProcessor {
             }
         }
 
-        // Input filter setup
+        // 尝试向inputBuffer.activeFilters中添加filter
         prepareInputFilters(headers);
 
-        // Validate host name and extract port if present
+        // 解析host，设置request.serverPort和request.ServerNameMb
         parseHost(hostValueMB);
 
         if (!getErrorState().isIoAllowed()) {
@@ -835,7 +828,7 @@ public class Http11Processor extends AbstractProcessor {
             }
         }
 
-        // Parse content-length header
+        // 解析请求头中的content-length的值
         long contentLength = -1;
         try {
             contentLength = request.getContentLengthLong();

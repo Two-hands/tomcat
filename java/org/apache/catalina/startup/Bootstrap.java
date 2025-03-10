@@ -16,6 +16,12 @@
  */
 package org.apache.catalina.startup;
 
+import org.apache.catalina.security.SecurityClassLoad;
+import org.apache.catalina.startup.ClassLoaderFactory.Repository;
+import org.apache.catalina.startup.ClassLoaderFactory.RepositoryType;
+import org.apache.juli.logging.Log;
+import org.apache.juli.logging.LogFactory;
+
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -26,12 +32,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import org.apache.catalina.security.SecurityClassLoad;
-import org.apache.catalina.startup.ClassLoaderFactory.Repository;
-import org.apache.catalina.startup.ClassLoaderFactory.RepositoryType;
-import org.apache.juli.logging.Log;
-import org.apache.juli.logging.LogFactory;
 
 /**
  * Bootstrap loader for Catalina.  This application constructs a class loader
@@ -53,14 +53,25 @@ public final class Bootstrap {
      * Daemon object used by main.
      */
     private static final Object daemonLock = new Object();
+
+
+    //org.apache.catalina.startup.Bootstrap实例对象
     private static volatile Bootstrap daemon = null;
 
+
+    //catalina.home对应的值，对应base目录
     private static final File catalinaBaseFile;
+
+
+    //catalina.home对应的值，对应的home目录
     private static final File catalinaHomeFile;
 
     private static final Pattern PATH_PATTERN = Pattern.compile("(\"[^\"]*\")|(([^,])*)");
 
+
+    //初始化catalinaBaseFile（catalina.base）与catalinaHomeFile（catalina.home）
     static {
+
         // Will always be non-null
         String userDir = System.getProperty("user.dir");
 
@@ -126,9 +137,7 @@ public final class Bootstrap {
     // -------------------------------------------------------------- Variables
 
 
-    /**
-     * Daemon reference.
-     */
+   // org.apache.catalina.startup.Catalina实例对象
     private Object catalinaDaemon = null;
 
     ClassLoader commonLoader = null;
@@ -141,6 +150,7 @@ public final class Bootstrap {
 
     private void initClassLoaders() {
         try {
+            //从catalina.properties配置中获取值，创建各种URLClassLoader
             commonLoader = createClassLoader("common", null);
             if (commonLoader == null) {
                 // no config file, default to this loader - we might be in a 'single' env.
@@ -244,21 +254,37 @@ public final class Bootstrap {
 
 
     /**
-     * Initialize daemon.
+     *  初始化Catalina对象，初始化各种ClassLoader
      * @throws Exception Fatal initialization error
      */
     public void init() throws Exception {
 
+        //     null
+        //      |
+        //     \|/
+        //  ExtClassLoader
+        //      |
+        //     \|/
+        //  AppClassLoader
+        //      |
+        //     \|/
+        //  URLClassLoader
+
+        //初始化commonLoader、catalinaLoader、sharedLoader（均为URLClassLoader类型）
         initClassLoaders();
 
+        //设置当前线程（main）的山下文类加载器为catalinaLoader（URLClassLoader类型）
         Thread.currentThread().setContextClassLoader(catalinaLoader);
 
+        //忽略，因为System.getSecurityManager()结果为null，无法进行安全加载
         SecurityClassLoad.securityClassLoad(catalinaLoader);
 
         // Load our startup class and call its process() method
         if (log.isDebugEnabled()) {
             log.debug("Loading startup class");
         }
+
+        //加载class（由AppClassLoader加载）
         Class<?> startupClass = catalinaLoader.loadClass("org.apache.catalina.startup.Catalina");
         Object startupInstance = startupClass.getConstructor().newInstance();
 
@@ -273,8 +299,9 @@ public final class Bootstrap {
         paramValues[0] = sharedLoader;
         Method method =
             startupInstance.getClass().getMethod(methodName, paramTypes);
-        method.invoke(startupInstance, paramValues);
 
+        //调用Catalina#setParentClassLoader方法设置sharedLoader类加载器
+        method.invoke(startupInstance, paramValues);
         catalinaDaemon = startupInstance;
     }
 
@@ -437,6 +464,7 @@ public final class Bootstrap {
      */
     public static void main(String args[]) {
 
+        //初始化Bootstrap、Catalina、3个ClassLoader（URLClassLoader）
         synchronized (daemonLock) {
             if (daemon == null) {
                 // Don't set daemon until init() has completed
@@ -457,6 +485,8 @@ public final class Bootstrap {
             }
         }
 
+
+        //从此刻开始，main线程的携带的类加载器是catalinaLoader（URLClassLoader）
         try {
             String command = "start";
             if (args.length > 0) {

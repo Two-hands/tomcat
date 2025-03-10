@@ -16,6 +16,9 @@
  */
 package org.apache.catalina.startup;
 
+import org.apache.juli.logging.Log;
+import org.apache.juli.logging.LogFactory;
+
 import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
@@ -27,9 +30,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-
-import org.apache.juli.logging.Log;
-import org.apache.juli.logging.LogFactory;
 
 /**
  * <p>Utility class for building class loaders for Catalina.  The factory
@@ -307,9 +307,17 @@ public final class ClassLoaderFactory {
 
 
     public enum RepositoryType {
+
+        //目录类型
         DIR,
+
+        //通配符类型
         GLOB,
+
+        //JAR类型
         JAR,
+
+        //URL类型
         URL
     }
 

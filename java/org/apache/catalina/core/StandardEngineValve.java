@@ -16,14 +16,13 @@
  */
 package org.apache.catalina.core;
 
-import java.io.IOException;
-
-import javax.servlet.ServletException;
-
 import org.apache.catalina.Host;
 import org.apache.catalina.connector.Request;
 import org.apache.catalina.connector.Response;
 import org.apache.catalina.valves.ValveBase;
+
+import javax.servlet.ServletException;
+import java.io.IOException;
 
 /**
  * Valve that implements the default basic behavior for the
@@ -65,6 +64,7 @@ final class StandardEngineValve extends ValveBase {
             // HTTP 0.9 or HTTP 1.0 request without a host when no default host
             // is defined.
             // Don't overwrite an existing error
+            //请求没有匹配对应的host，报404，终止处理
             if (!response.isError()) {
                 response.sendError(404);
             }
@@ -74,7 +74,7 @@ final class StandardEngineValve extends ValveBase {
             request.setAsyncSupported(host.getPipeline().isAsyncSupported());
         }
 
-        // Ask this Host to process this request
+        // 调用Host的valve进行进一步处理
         host.getPipeline().getFirst().invoke(request, response);
     }
 }

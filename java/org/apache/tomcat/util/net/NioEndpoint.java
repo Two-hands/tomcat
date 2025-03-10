@@ -16,6 +16,18 @@
  */
 package org.apache.tomcat.util.net;
 
+import org.apache.juli.logging.Log;
+import org.apache.juli.logging.LogFactory;
+import org.apache.tomcat.util.ExceptionUtils;
+import org.apache.tomcat.util.collections.SynchronizedQueue;
+import org.apache.tomcat.util.collections.SynchronizedStack;
+import org.apache.tomcat.util.compat.JreCompat;
+import org.apache.tomcat.util.compat.JrePlatform;
+import org.apache.tomcat.util.net.AbstractEndpoint.Handler.SocketState;
+import org.apache.tomcat.util.net.Acceptor.AcceptorState;
+import org.apache.tomcat.util.net.jsse.JSSESupport;
+
+import javax.net.ssl.SSLEngine;
 import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
@@ -25,17 +37,7 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
-import java.nio.channels.CancelledKeyException;
-import java.nio.channels.Channel;
-import java.nio.channels.ClosedChannelException;
-import java.nio.channels.CompletionHandler;
-import java.nio.channels.FileChannel;
-import java.nio.channels.NetworkChannel;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
-import java.nio.channels.WritableByteChannel;
+import java.nio.channels.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -50,31 +52,29 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-import javax.net.ssl.SSLEngine;
-
-import org.apache.juli.logging.Log;
-import org.apache.juli.logging.LogFactory;
-import org.apache.tomcat.util.ExceptionUtils;
-import org.apache.tomcat.util.collections.SynchronizedQueue;
-import org.apache.tomcat.util.collections.SynchronizedStack;
-import org.apache.tomcat.util.compat.JreCompat;
-import org.apache.tomcat.util.compat.JrePlatform;
-import org.apache.tomcat.util.net.AbstractEndpoint.Handler.SocketState;
-import org.apache.tomcat.util.net.Acceptor.AcceptorState;
-import org.apache.tomcat.util.net.jsse.JSSESupport;
-
 /**
- * NIO tailored thread pool, providing the following services:
- * <ul>
- * <li>Socket acceptor thread</li>
- * <li>Socket poller thread</li>
- * <li>Worker threads pool</li>
- * </ul>
+ * <pre>
+ *  NIO定制线程池，提供以下服务：
+ *   1、接收客户端新SocketChannel连接（Acceptor） 【阻塞式等待新客户端连接】
+ *   2、注册SocketChannel到Selector，负责感知新事件（Poller）  【非阻塞/阻塞两种方式等待读、写等事件的发生】
+ *   3、提供线程池真正处理从Poller感知到的SocketChannel（ThreadPool） 【当有事件发生时，将其交于线程池并发处理】
+ *第2条通过一个线程以事件驱动模式感知连接的读、写等，将线程池中的线程释放出来（不必每个线程持有一个连接，使得线程阻塞等待输入流中的数据到来），以提高服务器的Socket连接和并发数。
  *
- * TODO: Consider using the virtual machine's thread pool.
  *
- * @author Mladen Turk
- * @author Remy Maucherat
+ *  * Acceptor（线程）是AbstractEndpoint成员变量，由AbstractEndpoint创建并启动，持有EndPoint引用，便于与EndPoint通信
+ *  * NioEndpoint.Poller（线程）是NioEndpoint的成员变量，也是其内部类（可以与其外部类NioEndpoint通信），由NioEndpoint创建并启动。
+ *
+ *  **  1、Acceptor不断轮询 NioEndpoint.serverSock（ServerSocketChannel）监听客户端的连接
+ *  **  2、将接收到的新连接交于NioEndpoint.Poller注册感兴趣的"读事件"，当SocketChannel发生"读"事件时，NioEndpoint.Poller会将其交予NioEndpoint.executor并发处理
+ *
+ *              驱动                                  注册Socket
+ *    Acceptor ————> NioEndpoint.serverSock（接收Socket） ————>  NioEndpoint.poller
+ *
+ *                       监听Socket请求
+ *    NioEndpoint.poller  ——————————> NioEndpoint.executor（并发处理Socket请求）
+ *
+ *
+ * </pre>
  */
 public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> {
 
@@ -90,141 +90,13 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
 
     // ----------------------------------------------------------------- Fields
 
-    /**
-     * Server socket "pointer".
-     */
+    //服务端套接字通道（ServerSocketChannel），专门用于监听客户端的套接字通道（SocketChannel）连接
     private volatile ServerSocketChannel serverSock = null;
 
-    /**
-     * Stop latch used to wait for poller stop
-     */
-    private volatile CountDownLatch stopLatch = null;
-
-    /**
-     * Cache for poller events
-     */
-    private SynchronizedStack<PollerEvent> eventCache;
-
-    /**
-     * Bytebuffer cache, each channel holds a set of buffers (two, except for SSL holds four)
-     */
-    private SynchronizedStack<NioChannel> nioChannels;
-
-    private SocketAddress previousAcceptedSocketRemoteAddress = null;
-    private long previousAcceptedSocketNanoTime = 0;
-
-
-    // ------------------------------------------------------------- Properties
-
-    /**
-     * Use System.inheritableChannel to obtain channel from stdin/stdout.
-     */
-    private boolean useInheritedChannel = false;
-    public void setUseInheritedChannel(boolean useInheritedChannel) { this.useInheritedChannel = useInheritedChannel; }
-    public boolean getUseInheritedChannel() { return useInheritedChannel; }
-
-
-    /**
-     * Path for the Unix domain socket, used to create the socket address.
-     */
-    private String unixDomainSocketPath = null;
-    public String getUnixDomainSocketPath() { return this.unixDomainSocketPath; }
-    public void setUnixDomainSocketPath(String unixDomainSocketPath) {
-        this.unixDomainSocketPath = unixDomainSocketPath;
-    }
-
-
-    /**
-     * Permissions which will be set on the Unix domain socket if it is created.
-     */
-    private String unixDomainSocketPathPermissions = null;
-    public String getUnixDomainSocketPathPermissions() { return this.unixDomainSocketPathPermissions; }
-    public void setUnixDomainSocketPathPermissions(String unixDomainSocketPathPermissions) {
-        this.unixDomainSocketPathPermissions = unixDomainSocketPathPermissions;
-    }
-
-
-    /**
-     * Priority of the poller thread.
-     */
-    private int pollerThreadPriority = Thread.NORM_PRIORITY;
-    public void setPollerThreadPriority(int pollerThreadPriority) { this.pollerThreadPriority = pollerThreadPriority; }
-    public int getPollerThreadPriority() { return pollerThreadPriority; }
-
-
-    /**
-     * NO-OP.
-     *
-     * @param pollerThreadCount Unused
-     *
-     * @deprecated Will be removed in Tomcat 10.
-     */
-    @Deprecated
-    public void setPollerThreadCount(int pollerThreadCount) { }
-    /**
-     * Always returns 1.
-     *
-     * @return Always 1.
-     *
-     * @deprecated Will be removed in Tomcat 10.
-     */
-    @Deprecated
-    public int getPollerThreadCount() { return 1; }
-
-    private long selectorTimeout = 1000;
-    public void setSelectorTimeout(long timeout) { this.selectorTimeout = timeout;}
-    public long getSelectorTimeout() { return this.selectorTimeout; }
-
-    /**
-     * The socket poller.
-     */
+    //注册SocketChannel到Selector，负责感知新事件
     private Poller poller = null;
 
 
-    /**
-     * Is deferAccept supported?
-     */
-    @Override
-    public boolean getDeferAccept() {
-        // Not supported
-        return false;
-    }
-
-
-    // --------------------------------------------------------- Public Methods
-
-    /**
-     * Number of keep-alive sockets.
-     *
-     * @return The number of sockets currently in the keep-alive state waiting
-     *         for the next request to be received on the socket
-     */
-    public int getKeepAliveCount() {
-        if (poller == null) {
-            return 0;
-        } else {
-            return poller.getKeyCount();
-        }
-    }
-
-
-    @Override
-    public String getId() {
-        if (getUseInheritedChannel()) {
-            return "JVMInheritedChannel";
-        } else if (getUnixDomainSocketPath() != null) {
-            return getUnixDomainSocketPath();
-        } else {
-            return null;
-        }
-    }
-
-
-    // ----------------------------------------------- Public Lifecycle Methods
-
-    /**
-     * Initialize the endpoint.
-     */
     @Override
     public void bind() throws Exception {
         initServerSocket();
@@ -254,7 +126,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
             if (getUnixDomainSocketPathPermissions() != null) {
                 Path path = Paths.get(getUnixDomainSocketPath());
                 Set<PosixFilePermission> permissions =
-                        PosixFilePermissions.fromString(getUnixDomainSocketPathPermissions());
+                    PosixFilePermissions.fromString(getUnixDomainSocketPathPermissions());
                 if (path.getFileSystem().supportedFileAttributeViews().contains("posix")) {
                     FileAttribute<Set<PosixFilePermission>> attrs = PosixFilePermissions.asFileAttribute(permissions);
                     Files.setAttribute(path, attrs.name(), attrs.value());
@@ -276,6 +148,79 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
         }
         serverSock.configureBlocking(true); //mimic APR behavior
     }
+
+
+    /**
+     * Stop latch used to wait for poller stop
+     */
+    private volatile CountDownLatch stopLatch = null;
+    private SynchronizedStack<PollerEvent> eventCache;
+    private SynchronizedStack<NioChannel> nioChannels;
+    private SocketAddress previousAcceptedSocketRemoteAddress = null;
+    private long previousAcceptedSocketNanoTime = 0;
+    private boolean useInheritedChannel = false;
+    private String unixDomainSocketPath = null;
+
+    private String unixDomainSocketPathPermissions = null;
+    private int pollerThreadPriority = Thread.NORM_PRIORITY;
+    private long selectorTimeout = 1000;
+
+    public void setUseInheritedChannel(boolean useInheritedChannel) { this.useInheritedChannel = useInheritedChannel; }
+
+    public boolean getUseInheritedChannel() { return useInheritedChannel; }
+
+    public String getUnixDomainSocketPath() { return this.unixDomainSocketPath; }
+
+    public void setUnixDomainSocketPath(String unixDomainSocketPath) {
+        this.unixDomainSocketPath = unixDomainSocketPath;
+    }
+
+    public String getUnixDomainSocketPathPermissions() { return this.unixDomainSocketPathPermissions; }
+
+    public void setUnixDomainSocketPathPermissions(String unixDomainSocketPathPermissions) {
+        this.unixDomainSocketPathPermissions = unixDomainSocketPathPermissions;
+    }
+
+    public void setPollerThreadPriority(int pollerThreadPriority) { this.pollerThreadPriority = pollerThreadPriority; }
+
+    public int getPollerThreadPriority() { return pollerThreadPriority; }
+
+    public void setSelectorTimeout(long timeout) { this.selectorTimeout = timeout;}
+
+    public long getSelectorTimeout() { return this.selectorTimeout; }
+
+
+    /**
+     * Is deferAccept supported?
+     */
+    @Override
+    public boolean getDeferAccept() {
+        // Not supported
+        return false;
+    }
+
+
+
+    public int getKeepAliveCount() {
+        if (poller == null) {
+            return 0;
+        } else {
+            return poller.getKeyCount();
+        }
+    }
+
+
+    @Override
+    public String getId() {
+        if (getUseInheritedChannel()) {
+            return "JVMInheritedChannel";
+        } else if (getUnixDomainSocketPath() != null) {
+            return getUnixDomainSocketPath();
+        } else {
+            return null;
+        }
+    }
+
 
 
     /**
@@ -1224,6 +1169,10 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
             int limit = socketBufferHandler.getReadBuffer().capacity();
             if (to.remaining() >= limit) {
                 to.limit(to.position() + limit);
+                //尝试从Socket中读取数据，并将数据结果放入to中
+                // block  - 是否阻塞读取？
+                //    - true 阻塞，若在指定读取超时时间内未读取到数据，阻塞当前读取数据的线程
+                //    - false 非阻塞，若未读取到数据，立马返回
                 nRead = fillReadBuffer(block, to);
                 if (log.isDebugEnabled()) {
                     log.debug("Socket: [" + this + "], Read direct from socket: [" + nRead + "]");
@@ -1297,9 +1246,14 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                 throw new ClosedChannelException();
             }
             if (block) {
+                //阻塞式读取：
+
+                //获取设置的读取超时时间
                 long timeout = getReadTimeout();
                 long startNanos = 0;
                 do {
+
+                    //若读取超时，报错
                     if (startNanos > 0) {
                         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
                         if (elapsedMillis == 0) {
@@ -1310,15 +1264,21 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                             throw new SocketTimeoutException();
                         }
                     }
+
+                    //尝试从SocketChannel读取数据
                     n = getSocket().read(buffer);
                     if (n == -1) {
+                        //去读发生错误：网络通信中断？？？
                         throw new EOFException();
                     } else if (n == 0) {
+                        //没有读取到任何数据...
+                        //尝试设置读阻塞状态
                         if (!readBlocking) {
                             readBlocking = true;
                             registerReadInterest();
                         }
                         synchronized (readLock) {
+                            //若需要读阻塞，则阻塞当前线程
                             if (readBlocking) {
                                 try {
                                     if (timeout > 0) {
@@ -1333,8 +1293,10 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                             }
                         }
                     }
-                } while (n == 0); // TLS needs to loop as reading zero application bytes is possible
+                    //不断尝试阻塞式读取数据，直到读取到数据或读取时间超时...
+                } while (n == 0);
             } else {
+                //非阻塞式读取
                 n = getSocket().read(buffer);
                 if (n == -1) {
                     throw new EOFException();
@@ -1751,6 +1713,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
             try {
                 int handshake = -1;
                 try {
+                    //当socketWrapper为NioSocketWrapper时，此时始终为true
                     if (socketWrapper.getSocket().isHandshakeComplete()) {
                         // No TLS handshaking required. Let the handler
                         // process this socket / event combination.
@@ -1761,6 +1724,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                         // if the handshake failed.
                         handshake = -1;
                     } else {
+                        ///当socketWrapper为NioSocketWrapper时，handshake始终为0
                         handshake = socketWrapper.getSocket().handshake(event == SocketEvent.OPEN_READ, event == SocketEvent.OPEN_WRITE);
                         // The handshake process reads/writes from/to the
                         // socket. status may therefore be OPEN_WRITE once
@@ -1780,9 +1744,13 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                 } catch (CancelledKeyException ckx) {
                     handshake = -1;
                 }
+
+
+                //握手成功
                 if (handshake == 0) {
-                    SocketState state = SocketState.OPEN;
-                    // Process the request from this socket
+                    SocketState state;
+                    // 开始处理Socket的请求
+                    //getHandler -> AbstractProtocol#ConnectionHandler（含ProtocolHandler）
                     if (event == null) {
                         state = getHandler().process(socketWrapper, SocketEvent.OPEN_READ);
                     } else {

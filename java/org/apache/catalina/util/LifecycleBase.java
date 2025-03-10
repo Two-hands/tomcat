@@ -16,18 +16,14 @@
  */
 package org.apache.catalina.util;
 
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-
-import org.apache.catalina.Lifecycle;
-import org.apache.catalina.LifecycleEvent;
-import org.apache.catalina.LifecycleException;
-import org.apache.catalina.LifecycleListener;
-import org.apache.catalina.LifecycleState;
+import org.apache.catalina.*;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.res.StringManager;
+
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Base implementation of the {@link Lifecycle} interface that implements the
@@ -132,8 +128,12 @@ public abstract class LifecycleBase implements Lifecycle {
         }
 
         try {
+            //当前为新建状态，开始进行初始化：
+            //设置状态为初始化中....（INITIALIZING）
             setStateInternal(LifecycleState.INITIALIZING, null, false);
+            //调用子类具体的初始化动作...
             initInternal();
+            //初始化完成后，设置状态为初始化完成（INITIALIZED）
             setStateInternal(LifecycleState.INITIALIZED, null, false);
         } catch (Throwable t) {
             handleSubClassException(t, "lifecycleBase.initFail", toString());
@@ -170,8 +170,10 @@ public abstract class LifecycleBase implements Lifecycle {
         }
 
         if (state.equals(LifecycleState.NEW)) {
+            //若为新建状态（NEW），开始进行初始化...
             init();
         } else if (state.equals(LifecycleState.FAILED)) {
+            //若为失败状态（FAILED），开始进行停止...
             stop();
         } else if (!state.equals(LifecycleState.INITIALIZED) &&
                 !state.equals(LifecycleState.STOPPED)) {

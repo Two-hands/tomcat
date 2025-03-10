@@ -16,19 +16,6 @@
  */
 package org.apache.catalina.connector;
 
-import java.io.IOException;
-import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
-import java.util.EnumSet;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import javax.servlet.ReadListener;
-import javax.servlet.RequestDispatcher;
-import javax.servlet.ServletException;
-import javax.servlet.SessionTrackingMode;
-import javax.servlet.WriteListener;
-import javax.servlet.http.HttpServletResponse;
-
 import org.apache.catalina.Authenticator;
 import org.apache.catalina.Context;
 import org.apache.catalina.Host;
@@ -52,6 +39,14 @@ import org.apache.tomcat.util.http.ServerCookies;
 import org.apache.tomcat.util.net.SSLSupport;
 import org.apache.tomcat.util.net.SocketEvent;
 import org.apache.tomcat.util.res.StringManager;
+
+import javax.servlet.*;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.EnumSet;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 
 /**
@@ -320,13 +315,14 @@ public class CoyoteAdapter implements Adapter {
         Response response = (Response) res.getNote(ADAPTER_NOTES);
 
         if (request == null) {
-            // Create objects
+
+            //创建HttpServletRequest和HttpServletResponse对象，并关联tomcat内置的Request和Response
             request = connector.createRequest();
             request.setCoyoteRequest(req);
             response = connector.createResponse();
             response.setCoyoteResponse(res);
 
-            // Link objects
+            // HttpServletRequest和HttpServletResponse互相关联
             request.setResponse(response);
             response.setRequest(request);
 
@@ -334,7 +330,7 @@ public class CoyoteAdapter implements Adapter {
             req.setNote(ADAPTER_NOTES, request);
             res.setNote(ADAPTER_NOTES, response);
 
-            // Set query string encoding
+            // 设置请求中参数的字符集编码
             req.getParameters().setQueryStringCharset(connector.getURICharset());
         }
 
@@ -349,16 +345,24 @@ public class CoyoteAdapter implements Adapter {
         req.setRequestThread();
 
         try {
-            // Parse and set Catalina and configuration specific
-            // request parameters
+            //处理解析完成的请求行和请求头：
+            // 1、必要的请求设置
+            // 2、根据请求行、请求头获取Host、Context、Wrapper映射...
+            // 3、处理Cookie获取session id
+            // 4、处理重定向请求
+            // 5、处理TRACE方式请求
+            // 6、处理请求含用户认证情况
             postParseSuccess = postParseRequest(req, request, res, response);
             if (postParseSuccess) {
                 //check valves if we support async
                 request.setAsyncSupported(
                         connector.getService().getContainer().getPipeline().isAsyncSupported());
-                // Calling the container
+
+                //***** 调用Service中的容器进行请求处理 *****
+                // Service.engine的StandardEngineValve（basic）会获取request.mappingData.host的Pipeline继续链式处理...
                 connector.getService().getContainer().getPipeline().getFirst().invoke(
                         request, response);
+
             }
             if (request.isAsync()) {
                 async = true;
@@ -564,23 +568,11 @@ public class CoyoteAdapter implements Adapter {
 
     // ------------------------------------------------------ Protected Methods
 
+
     /**
-     * Perform the necessary processing after the HTTP headers have been parsed
-     * to enable the request/response pair to be passed to the start of the
-     * container pipeline for processing.
-     *
-     * @param req      The coyote request object
-     * @param request  The catalina request object
-     * @param res      The coyote response object
-     * @param response The catalina response object
-     *
-     * @return <code>true</code> if the request should be passed on to the start
-     *         of the container pipeline, otherwise <code>false</code>
-     *
-     * @throws IOException If there is insufficient space in a buffer while
-     *                     processing headers
-     * @throws ServletException If the supported methods of the target servlet
-     *                          cannot be determined
+     * 解析请求行和请求头后的必要处理：
+     *    1、根据host和URI匹配合适的StandardHost，StandardContext，StandardWrapper实例（用于后续处理请求）
+     *    2、尝试根据请求路径参数、请求头携带的JSESSIONID到已匹配的StandardContext中获取Session对象
      */
     protected boolean postParseRequest(org.apache.coyote.Request req, Request request,
             org.apache.coyote.Response res, Response response) throws IOException, ServletException {
@@ -589,8 +581,7 @@ public class CoyoteAdapter implements Adapter {
         // SSL is enabled) use this to set the secure flag as well. If the
         // processor hasn't set it, use the settings from the connector
         if (req.scheme().isNull()) {
-            // Use connector scheme and secure configuration, (defaults to
-            // "http" and false respectively)
+            //没有解析到schema，默认赋予schema的值为http
             req.scheme().setString(connector.getScheme());
             request.setSecure(connector.getSecure());
         } else {
@@ -605,7 +596,7 @@ public class CoyoteAdapter implements Adapter {
         if (proxyPort != 0) {
             req.setServerPort(proxyPort);
         } else if (req.getServerPort() == -1) {
-            // Not explicitly set. Use default ports based on the scheme
+            //没有指明明确端口信息，通过schema设置默认端口（http=80、https=443）
             if (req.scheme().equals("https")) {
                 req.setServerPort(443);
             } else {
@@ -710,7 +701,7 @@ public class CoyoteAdapter implements Adapter {
         }
 
         while (mapRequired) {
-            // This will map the the latest version by default
+            // 解析host、context、servlet的映射关系
             connector.getService().getMapper().map(serverName, decodedURI,
                     version, request.getMappingData());
 
@@ -731,11 +722,12 @@ public class CoyoteAdapter implements Adapter {
             // Now we have the context, we can parse the session ID from the URL
             // (if any). Need to do this before we redirect in case we need to
             // include the session id in the redirect
+            //** 获取session id
             String sessionID;
             if (request.getServletContext().getEffectiveSessionTrackingModes()
                     .contains(SessionTrackingMode.URL)) {
 
-                // Get the session ID if there was one
+               //1、先从请求参数中获取指定参数名称的值（默认为jsessionid）为session id
                 sessionID = request.getPathParameter(
                         SessionConfig.getSessionUriParamName(
                                 request.getContext()));
@@ -745,8 +737,9 @@ public class CoyoteAdapter implements Adapter {
                 }
             }
 
-            // Look for session ID in cookies and SSL session
+
             try {
+                //2、若未从请求参数中获取到session id，则尝试从请求头中解析Cookies，获取指定的Cookie名（默认为JSESSIONID）对应的值为session id
                 parseSessionCookiesId(request);
             } catch (IllegalArgumentException e) {
                 // Too many cookies
@@ -756,13 +749,18 @@ public class CoyoteAdapter implements Adapter {
                 }
                 return true;
             }
+
+            //3、若是https请求，并且没有session id，则尝试解析获取session ssl id（key=javax.servlet.request.ssl_session_id）
             parseSessionSslId(request);
 
-            sessionID = request.getRequestedSessionId();
 
+            //校验通过映射找到的StandardContext信息找到的session id是否能找到符合版本要求的Session？
+            //    -  不符合要求则设置version、versionContext值并终止本次寻找，再次循环
+            //通过上面3步中得到的session id到已匹配的StandardContext中寻找对应的Session对象
+            sessionID = request.getRequestedSessionId();
             mapRequired = false;
             if (version != null && request.getContext() == versionContext) {
-                // We got the version that we asked for. That is it.
+                //找到的StandardContext已经符合要求...继续下面的操作
             } else {
                 version = null;
                 versionContext = null;
@@ -773,21 +771,20 @@ public class CoyoteAdapter implements Adapter {
                 if (contexts != null && sessionID != null) {
                     // Find the context associated with the session
                     for (int i = contexts.length; i > 0; i--) {
+                        //尝试从已匹配的StandardContext中根据session id获取Session对象
                         Context ctxt = contexts[i - 1];
                         if (ctxt.getManager().findSession(sessionID) != null) {
+                            //找到Session对象
                             // We found a context. Is it the one that has
                             // already been mapped?
                             if (!ctxt.equals(request.getMappingData().context)) {
-                                // Set version so second time through mapping
-                                // the correct context is found
+                                // 设置版本，以便第二次在[解析host、context、servlet的映射关系]时找到正确的上下文
                                 version = ctxt.getWebappVersion();
                                 versionContext = ctxt;
                                 // Reset mapping
                                 request.getMappingData().recycle();
                                 mapRequired = true;
-                                // Recycle cookies and session info in case the
-                                // correct context is configured with different
-                                // settings
+                                // 如果使用不同的设置配置了正确的上下文，则重置Cookie和会话信息
                                 request.recycleSessionInfo();
                                 request.recycleCookieInfo(true);
                             }
@@ -797,6 +794,8 @@ public class CoyoteAdapter implements Adapter {
                 }
             }
 
+
+            //当匹配映射成功后，由于容器暂停（可能wrapper发生变化后还未注册...）,则需等待片刻后重置已获取的映射，等待下次循环重新匹配映射
             if (!mapRequired && request.getContext().getPaused()) {
                 // Found a matching context but it is paused. Mapping data will
                 // be wrong since some Wrappers may not be registered at this
@@ -812,7 +811,7 @@ public class CoyoteAdapter implements Adapter {
             }
         }
 
-        // Possible redirect
+        // 请求可能需要重定向...
         MessageBytes redirectPathMB = request.getMappingData().redirectPath;
         if (!redirectPathMB.isNull()) {
             String redirectPath = URLEncoder.DEFAULT.encode(
@@ -836,7 +835,7 @@ public class CoyoteAdapter implements Adapter {
             return false;
         }
 
-        // Filter trace method
+        // 处理TRACE请求方式：可能需要拒绝TRANCE请求
         if (!connector.getAllowTrace()
                 && req.method().equalsIgnoreCase("TRACE")) {
             Wrapper wrapper = request.getWrapper();
@@ -864,6 +863,7 @@ public class CoyoteAdapter implements Adapter {
             return true;
         }
 
+        //请求认证相关处理
         doConnectorAuthenticationAuthorization(req, request);
 
         return true;
@@ -1043,15 +1043,17 @@ public class CoyoteAdapter implements Adapter {
             return;
         }
 
-        // Parse session id from cookies
+        // 解析Cookies，获取session id（请求头中含Cookie的值）
         ServerCookies serverCookies = request.getServerCookies();
         int count = serverCookies.getCookieCount();
         if (count <= 0) {
             return;
         }
 
+        //获取Cookies中session id的标识，默认为JSESSIONID
         String sessionCookieName = SessionConfig.getSessionCookieName(context);
 
+        //从解析的Cookies中获取key为JSESSIONID的value，并设置到request中
         for (int i = 0; i < count; i++) {
             ServerCookie scookie = serverCookies.getCookie(i);
             if (scookie.getName().equals(sessionCookieName)) {

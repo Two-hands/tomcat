@@ -60,17 +60,19 @@ public final class Bootstrap {
 
 
     //catalina.home对应的值，对应base目录
+    //存放运行时配置的根目录，包含配置文件、日志文件、部署的应用程序和其他运行时要求
     private static final File catalinaBaseFile;
 
 
     //catalina.home对应的值，对应的home目录
+    //Tomcat安装的根目录，通常包含bin目录和lib目录
     private static final File catalinaHomeFile;
 
     private static final Pattern PATH_PATTERN = Pattern.compile("(\"[^\"]*\")|(([^,])*)");
 
 
-    //初始化catalinaBaseFile（catalina.base）与catalinaHomeFile（catalina.home）
     static {
+        //** 初始化catalinaBaseFile（catalina.base）与catalinaHomeFile（catalina.home）**
 
         // Will always be non-null
         String userDir = System.getProperty("user.dir");
@@ -464,7 +466,9 @@ public final class Bootstrap {
      */
     public static void main(String args[]) {
 
-        //初始化Bootstrap、Catalina、3个ClassLoader（URLClassLoader）
+        //1、main执行时，加载Bootstrap类，会执行其static方法，初始化catalinaHome与catalinaBase
+
+        //2、初始化类加载器：Bootstrap、Catalina、3个ClassLoader（URLClassLoader）
         synchronized (daemonLock) {
             if (daemon == null) {
                 // Don't set daemon until init() has completed
@@ -486,7 +490,8 @@ public final class Bootstrap {
         }
 
 
-        //从此刻开始，main线程的携带的类加载器是catalinaLoader（URLClassLoader）
+        // 执行Catalina对应的方法，主要看Catalina#start
+        // 从此刻开始，main线程的携带的类加载器是catalinaLoader（URLClassLoader）
         try {
             String command = "start";
             if (args.length > 0) {

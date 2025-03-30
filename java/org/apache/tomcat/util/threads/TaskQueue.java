@@ -16,19 +16,17 @@
  */
 package org.apache.tomcat.util.threads;
 
+import org.apache.tomcat.util.res.StringManager;
+
 import java.util.Collection;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.tomcat.util.res.StringManager;
-
 /**
- * As task queue specifically designed to run with a thread pool executor. The
- * task queue is optimised to properly utilize threads within a thread pool
- * executor. If you use a normal queue, the executor will spawn threads when
- * there are idle threads and you wont be able to force items onto the queue
- * itself.
+ * <pre>
+ * 一个继承LinkedBlockingQueue的扩展Queue，尽量保证线程最大化（当前所有线程非空闲且线程池中线程数未达最大限制，不允许入队列，需要创建新的线程）
+ * </pre>
  */
 public class TaskQueue extends LinkedBlockingQueue<Runnable> {
 
@@ -106,14 +104,17 @@ public class TaskQueue extends LinkedBlockingQueue<Runnable> {
             return super.offer(o);
         }
         //we are maxed out on threads, simply queue the object
+        //线程池的线程数量已达到最大线程数量限制，入队列等待线程处理（无法再创建线程...）
         if (parent.getPoolSize() == parent.getMaximumPoolSize()) {
             return super.offer(o);
         }
         //we have idle threads, just add it to the queue
+        // 当前提交（未执行完）任务数 不超过活跃线程数量，说明线程有空闲，入队等待线程处理...
         if (parent.getSubmittedCount()<=(parent.getPoolSize())) {
             return super.offer(o);
         }
         //if we have less threads than maximum force creation of a new thread
+        // 线程活跃数量还未达到上限，需要继续添加线程而不是立即入队
         if (parent.getPoolSize()<parent.getMaximumPoolSize()) {
             return false;
         }

@@ -19,11 +19,27 @@ package javax.websocket;
 import java.util.List;
 import java.util.Map;
 
+
+/**
+ *  websocket端点（服务端、客户端）的配置
+ */
 public interface EndpointConfig {
 
+    /**
+     * 获取websocket端点通讯时的编码器
+     * @return 编码器集合
+     */
     List<Class<? extends Encoder>> getEncoders();
 
+    /**
+     * 获取websocket端点通讯时的解码器
+     * @return 解码器集合
+     */
     List<Class<? extends Decoder>> getDecoders();
 
+    /**
+     * 获取websocket需要的额外配置信息
+     * @return 配置信息
+     */
     Map<String,Object> getUserProperties();
 }

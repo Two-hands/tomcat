@@ -16,6 +16,7 @@
  */
 package org.apache.tomcat.util.net;
 
+import javax.management.ObjectName;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -23,8 +24,6 @@ import java.net.SocketException;
 import java.net.StandardSocketOptions;
 import java.nio.channels.AsynchronousServerSocketChannel;
 import java.nio.channels.AsynchronousSocketChannel;
-
-import javax.management.ObjectName;
 
 /**
  * Properties that can be set in the &lt;Connector&gt; element
@@ -149,9 +148,8 @@ public class SocketProperties {
      */
     protected Integer soLingerTime = null;
 
-    /**
-     * SO_TIMEOUT option. default is 20000.
-     */
+
+    //socket读取数据的超时时间，默认20s
     protected Integer soTimeout = Integer.valueOf(20000);
 
     /**

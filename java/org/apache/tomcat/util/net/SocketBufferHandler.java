@@ -40,12 +40,20 @@ public class SocketBufferHandler {
         }
     };
 
+    //记录当前[读缓冲区]是否正处于写入状态
+    // true  - 处于写状态，可以向读缓冲区放入数据
+    // false - 处于读状态，可以从读缓冲区拿出数据
     private volatile boolean readBufferConfiguredForWrite = true;
+
+    //读缓冲区，由SocketProperties决定，默认8KB
     private volatile ByteBuffer readBuffer;
 
     private volatile boolean writeBufferConfiguredForWrite = true;
+
+    //写缓冲区，由SocketProperties决定，默认8KB
     private volatile ByteBuffer writeBuffer;
 
+    //缓冲区是否为堆外内存？ true - 堆外内存
     private final boolean direct;
 
     public SocketBufferHandler(int readBufferSize, int writeBufferSize,
@@ -63,31 +71,43 @@ public class SocketBufferHandler {
     }
 
 
+    /**
+     * 将[读]缓冲区切换为写状态[准备放入数据]
+     */
     public void configureReadBufferForWrite() {
         setReadBufferConfiguredForWrite(true);
     }
 
 
+    /**
+     * 将[读]缓冲区切换为读状态[准备拿出数据]
+     */
     public void configureReadBufferForRead() {
         setReadBufferConfiguredForWrite(false);
     }
 
 
+    /**
+     * 设置读缓冲区为写入状态
+     * @param readBufferConFiguredForWrite 要转换为写入状态？ true - 写
+     */
     private void setReadBufferConfiguredForWrite(boolean readBufferConFiguredForWrite) {
-        // NO-OP if buffer is already in correct state
+
         if (this.readBufferConfiguredForWrite != readBufferConFiguredForWrite) {
             if (readBufferConFiguredForWrite) {
-                // Switching to write
+                //缓冲区切换为写状态[准备放入数据]
                 int remaining = readBuffer.remaining();
                 if (remaining == 0) {
                     readBuffer.clear();
                 } else {
+                    //缓冲区还有数据，先压缩数据，再写入
                     readBuffer.compact();
                 }
             } else {
-                // Switching to read
+                //缓冲区切换为读状态[准备拿出数据]
                 readBuffer.flip();
             }
+
             this.readBufferConfiguredForWrite = readBufferConFiguredForWrite;
         }
     }
@@ -100,8 +120,10 @@ public class SocketBufferHandler {
 
     public boolean isReadBufferEmpty() {
         if (readBufferConfiguredForWrite) {
+            //写状态时，缓冲器没有任何数据时表示缓冲区为空
             return readBuffer.position() == 0;
         } else {
+            //读状态时，缓冲区没有数据可读表示缓冲器为空
             return readBuffer.remaining() == 0;
         }
     }
@@ -156,21 +178,31 @@ public class SocketBufferHandler {
     }
 
 
+    /**
+     * 将[写]缓冲区设置为写状态[准备放入数据]
+     */
     public void configureWriteBufferForWrite() {
         setWriteBufferConfiguredForWrite(true);
     }
 
 
+    /**
+     * 将[写]缓冲区设置为读状态[准备拿出数据]
+     */
     public void configureWriteBufferForRead() {
         setWriteBufferConfiguredForWrite(false);
     }
 
 
+    /**
+     * 设置写缓冲区为写入状态？
+     * @param writeBufferConfiguredForWrite  要转换为写入状态？ true - 写
+     */
     private void setWriteBufferConfiguredForWrite(boolean writeBufferConfiguredForWrite) {
-        // NO-OP if buffer is already in correct state
+
         if (this.writeBufferConfiguredForWrite != writeBufferConfiguredForWrite) {
             if (writeBufferConfiguredForWrite) {
-                // Switching to write
+                //缓冲区切换为写状态[准备放入数据]
                 int remaining = writeBuffer.remaining();
                 if (remaining == 0) {
                     writeBuffer.clear();
@@ -180,7 +212,7 @@ public class SocketBufferHandler {
                     writeBuffer.limit(writeBuffer.capacity());
                 }
             } else {
-                // Switching to read
+                //缓冲区切换为读状态[准备拿出数据]
                 writeBuffer.flip();
             }
             this.writeBufferConfiguredForWrite = writeBufferConfiguredForWrite;
@@ -211,6 +243,9 @@ public class SocketBufferHandler {
     }
 
 
+    /**
+     * 重置缓冲区
+     */
     public void reset() {
         readBuffer.clear();
         readBufferConfiguredForWrite = true;
@@ -219,6 +254,10 @@ public class SocketBufferHandler {
     }
 
 
+    /**
+     * 缓冲区扩容
+     * @param newSize 扩容大小
+     */
     public void expand(int newSize) {
         configureReadBufferForWrite();
         readBuffer = ByteBufferUtils.expand(readBuffer, newSize);

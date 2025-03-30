@@ -68,9 +68,7 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
 
     private final boolean rejectIllegalHeader;
 
-    /**
-     * State.
-     */
+    //是否正处于解析请求头？true - 正处于解析请求头
     private volatile boolean parsingHeader;
 
 
@@ -86,10 +84,8 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
     private ByteBuffer byteBuffer;
 
 
-    /**
-     * Pos of the end of the header in the buffer, which is also the
-     * start of the body.
-     */
+
+    //byteBuffer中请求头数据结尾的位置[请求体开始的位置]
     private int end;
 
 
@@ -129,20 +125,35 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
      * when more data arrives, we can pick up where we left off.
      */
     private byte prevChr = 0;
+
     private byte chr = 0;
+
+    //是否要解析请求行？ true - 需要解析请求行
     private volatile boolean parsingRequestLine;
+
+    // -1 - 当前请求为HTTP/2.0，无需按照HTTP/1.1进行解析（无需按2-6步骤）
+    //  0 - 解析请求行的初始状态...
+    //  1 - 没有数据到达，无法开始解析请求行
+    // <2 - 解析请求行的[请求方式]部分前的准备
+    //  2 - 正式解析[请求方式]部分
+    //  3 - 解析请求行的[URI]部分前的准备
+    //  4 - 正式解析[URI]部分
+    //  5 - 解析请求行的[协议及版本]部分前的准备
+    //  6 - 正式解析[协议及版本]部分
+    //  7 - 请求行【解析完成】
     private int parsingRequestLinePhase = 0;
+
+    //请求行是否解析结束 true - 结束
     private boolean parsingRequestLineEol = false;
+
     private int parsingRequestLineStart = 0;
     private int parsingRequestLineQPos = -1;
     private HeaderParsePosition headerParsePos;
     private final HeaderParseData headerData = new HeaderParseData();
     private final HttpParser httpParser;
 
-    /**
-     * Maximum allowed size of the HTTP request line plus headers plus any
-     * leading blank lines.
-     */
+
+    //HTTP请求行 + 请求头 + 以及它们前面的空行 允许使用的最大字节数，默认16KB
     private final int headerBufferSize;
 
     /**
@@ -326,51 +337,44 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
     }
 
 
+
     /**
-     * 解析HTTP请求行：
-     *       请求方式    URI    协议类型及版本号
-     *   如：  GET    /test       HTTP/1.1
-     *
-     *   注意：若URI部分带有请求参数（即后面带有"?k1=v1&k2=v2"），则还需解析请求参数
+     * <pre>
+     * 解析请求行（包括：请求方式、请求URI[可能含有请求参数]、协议及版本号），请求行只含ascii码
+     * <b>注意：请求行内容开头和结尾不能含有空格。开头可以含有换行符，结尾必含换行符</b>
+     * @return 请求行是否解析成功？ true - 解析成功： 1、parsingRequestLine=false，2、真正解析完；
+     *                          false - 解析失败：1、请求行数据尚未完整到达，2、当前请求是HTTP/2.0
+     *</pre>
      */
     boolean parseRequestLine(boolean keptAlive, int connectionTimeout, int keepAliveTimeout)
             throws IOException {
 
-        //若已经解析过请求行，则不再解析
+        //无需解析请求行，跳过解析过程
         if (!parsingRequestLine) {
             return true;
         }
 
-        //解析请求行：
-        //** 跳过请求行前面所有的回车、换行符
-        //  parsingRequestLineStart - 记录首个非回车、换行符的字节数据位置
-        //  byteBuffer - 读取到的部分请求数据
-        //如： ------------------------------------------------------
-        //  '\n' '\r' '\t' ' 'GET /test HTTP/1.1（跳过'\n'和'\r'；此时parsingRequestLineStart指向'\t'的位置）
-        //------------------------------------------------------
+        //1、解析请求行的[请求方式]部分前的准备，即：跳过请求行前面的所有换行符
         if (parsingRequestLinePhase < 2) {
             do {
 
-                //从Socket中读取数据
+                //必要时，填充数据到byteBuffer
                 if (byteBuffer.position() >= byteBuffer.limit()) {
-                    //byteBuffer中没有可读数据或数据已经读完，重新从Socket中读取数据
                     if (keptAlive) {
-                        // Haven't read any request data yet so use the keep-alive
-                        // timeout.
+                        //避免过长时间没接收到数据或是客户端已关闭
                         wrapper.setReadTimeout(keepAliveTimeout);
                     }
-                    //fill : 正式从Socket中获取数据并放到Http11InputBuffer.byteBuffer中
+                    //fill : 从socket接收缓冲区中获取数据，放入byteBuffer中
+                    //参数false：当前读取操作为非阻塞
                     if (!fill(false)) {
-                        // A read is pending, so no longer in initial state
                         parsingRequestLinePhase = 1;
                         return false;
                     }
-                    // At least one byte of the request has been received.
-                    // Switch to the socket timeout.
+                    //接收到数据后设置读超时时间
                     wrapper.setReadTimeout(connectionTimeout);
                 }
 
-                //每次重新读取数据后都要判断协议是否为HTTP/2
+                //每次重新读取数据后都要判断协议是否为HTTP/2.0
                 if (!keptAlive && byteBuffer.position() == 0 && byteBuffer.limit() >= CLIENT_PREFACE_START.length - 1) {
                     boolean prefaceMatch = true;
                     //CLIENT_PREFACE_START = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"（属于连接前言内容
@@ -381,49 +385,47 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                         }
                     }
                     if (prefaceMatch) {
-                        // HTTP/2 preface matched
+                        // 请求协议升级为HTTP/2.0
                         parsingRequestLinePhase = -1;
                         return false;
                     }
                 }
-                // Set the start time once we start reading data (even if it is
-                // just skipping blank lines)
+
+
+                //设置当前时间为开始读取报文时间
                 if (request.getStartTime() < 0) {
                     request.setStartTime(System.currentTimeMillis());
                 }
 
-                //读取byteBuffer中每个字节，直到读取到非CR、LF后终止（跳过开头的所有回车、换行符）
-                chr = byteBuffer.get();
                 //如果读取的内容首字节为换行符（Unix、Linux下是LF，Windows是CR LF），则为空行，再次重Socket中读取后续的数据
+                chr = byteBuffer.get();
             } while ((chr == Constants.CR) || (chr == Constants.LF));
 
-            //使缓存position复位（由于前面要读取首个字节来判断是否是空行）
+            //首个非换行符被拿出来比较过，所以要把缓冲区指针回滚
             byteBuffer.position(byteBuffer.position() - 1);
 
+            //记录当前缓冲区中的请求行的开始位置
             parsingRequestLineStart = byteBuffer.position();
             parsingRequestLinePhase = 2;
         }
 
-        //** 获取请求方式（GET/POST...），设置request.methodMB的值
-        // request.methodMB - 存放解析到的请求方式
-        //如：------------------------------------------------------
-        //  't'' 'GET /test HTTP/1.1 （跳过't'和' '；获取请求方式GET）
-        //------------------------------------------------------
+
+        //2、正式解析请求行的[请求方式]部分，如：GET、POST
+        //请求方式部分内容只能含：!#$%&'*+-.^_`|~0-9A-Za-z
+        //直到读取到空格位置（不算空格）
         if (parsingRequestLinePhase == 2) {
-            //尝试读取HTTP请求方式（GET/POST....）
             boolean space = false;
+
+            //读到空隔为止
             while (!space) {
 
                 if (byteBuffer.position() >= byteBuffer.limit()) {
-                    //byteBuffer中数据已经读取完毕，再次从Socket读取请求数据到byteBuffer
                     if (!fill(false)) {
                         return false;
                     }
                 }
 
                 int pos = byteBuffer.position();
-
-                //从byteBuffer读取当前字节
                 chr = byteBuffer.get();
                 //SP：空格；HT：制表符
                 //读取到空格或制表符就终止（可以是多个空格、制表符），前面部分就是请求方法
@@ -434,7 +436,7 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                     request.method().setBytes(byteBuffer.array(), parsingRequestLineStart,
                             pos - parsingRequestLineStart);
                 } else if (!HttpParser.isToken(chr)) {
-                    // Avoid unknown protocol triggering an additional error
+                    //字符不在 !#$%&'*+-.^_`|~0-9A-Za-z 中
                     request.protocol().setString(Constants.HTTP_11);
                     String invalidMethodValue = parseInvalid(parsingRequestLineStart, byteBuffer);
                     throw new IllegalArgumentException(sm.getString("iib.invalidmethod", invalidMethodValue));
@@ -443,24 +445,19 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
             parsingRequestLinePhase = 3;
         }
 
-        //** 跳过请求方式后面的空格、制表符
-        //如：------------------------------------------------------
-        // GET' ' '\t' /test HTTP/1.1  （跳过't'和' '；此时的parsingRequestLineStart指向/的位置【test前面的/】）
-        //------------------------------------------------------
+        //3、解析请求行的[URI]部分前的准备，即：跳过请求行中[请求方式]后紧接着的所有空格、制表符
         if (parsingRequestLinePhase == 3) {
-            // Spec says single SP but also be tolerant of multiple SP and/or HT
             boolean space = true;
             while (space) {
 
                 if (byteBuffer.position() >= byteBuffer.limit()) {
-                    //byteBuffer中数据已经读取完毕，再次从Socket读取请求数据到byteBuffer
                     if (!fill(false)) {
                         return false;
                     }
                 }
-                //从byteBuffer读取当前字节
-                chr = byteBuffer.get();
 
+
+                chr = byteBuffer.get();
                 //SP：空格；HT：制表符
                 //读取到空格或制表符就终止（可以是多个空格、制表符），前面部分就是请求方法
                 if (!(chr == Constants.SP || chr == Constants.HT)) {
@@ -468,53 +465,48 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                     byteBuffer.position(byteBuffer.position() - 1);
                 }
             }
+
+            // 记录请求行中URI内容的开始位置
             parsingRequestLineStart = byteBuffer.position();
             parsingRequestLinePhase = 4;
         }
 
-        //** 读取URI，设置request.uriMB的值（若带有参数，还需设置request.queryMB的值）
-        //如：------------------------------------------------------
-        // /test？k1=v1&k2=v2 HTTP/1.1  （获取URI，值为/test）
-        //------------------------------------------------------
+        //4、正式解析请求行的[URI]部分，如：/test?key=value
+        //URI部分只能含：$%&'()*+,-./0-9:;=?@A-Z[]_a-z~
+        //URI部分的请求参数只能含：!$%&'()*+,-./:;=?@~_0-9A-Za-z
         if (parsingRequestLinePhase == 4) {
-            // Mark the current buffer position
-
             int end = 0;
 
-            //读取到下个空格、制表符的位置x，截取当前位置到x区间的字节（这部分字节为URI值）
             boolean space = false;
             while (!space) {
 
                 if (byteBuffer.position() >= byteBuffer.limit()) {
-                    //byteBuffer中数据已经读取完毕，再次从Socket读取请求数据到byteBuffer
                     if (!fill(false)) {
                         return false;
                     }
                 }
+
+
                 int pos = byteBuffer.position();
                 prevChr = chr;
                 chr = byteBuffer.get();
                 if (prevChr == Constants.CR && chr != Constants.LF) {
-                    // CR not followed by LF so not an HTTP/0.9 request and
-                    // therefore invalid. Trigger error handling.
-                    // Avoid unknown protocol triggering an additional error
+                    // CR后面没有LF，所以不是HTTP/0.9请求
                     request.protocol().setString(Constants.HTTP_11);
                     String invalidRequestTarget = parseInvalid(parsingRequestLineStart, byteBuffer);
                     throw new IllegalArgumentException(sm.getString("iib.invalidRequestTarget", invalidRequestTarget));
                 }
+
                 if (chr == Constants.SP || chr == Constants.HT) {
                     //读取的字节为空格、制表符时终止读取....
                     space = true;
                     end = pos;
                 } else if (chr == Constants.CR) {
-                    // HTTP/0.9 style request. CR is optional. LF is not.
+                    // HTTP/0.9：LF是必有，CR是可选的
                 } else if (chr == Constants.LF) {
-                    // HTTP/0.9 style request
-                    // Stop this processing loop
                     space = true;
-                    // Set blank protocol (indicates HTTP/0.9)
+                    //空格代表 HTTP/0.9
                     request.protocol().setString("");
-                    // Skip the protocol processing
                     parsingRequestLinePhase = 7;
                     if (prevChr == Constants.CR) {
                         end = pos - 1;
@@ -522,28 +514,26 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                         end = pos;
                     }
                 } else if (chr == Constants.QUESTION && parsingRequestLineQPos == -1) {
-                    //若URI中含'?'(QUESTION)，则表明带有参数，记录带有参数的位置
+                    //QUESTION 就是?
+                    //若URI中含'?'，则表明带有参数
+                    // 记录请求参数的位置
                     parsingRequestLineQPos = pos;
                 } else if (parsingRequestLineQPos != -1 && !httpParser.isQueryRelaxed(chr)) {
-                    // Avoid unknown protocol triggering an additional error
+                    //请求参数字符只能含：!$%&'()*+,-./:;=?@~_0-9A-Za-z
                     request.protocol().setString(Constants.HTTP_11);
-                    // %nn decoding will be checked at the point of decoding
                     String invalidRequestTarget = parseInvalid(parsingRequestLineStart, byteBuffer);
                     throw new IllegalArgumentException(sm.getString("iib.invalidRequestTarget", invalidRequestTarget));
                 } else if (httpParser.isNotRequestTargetRelaxed(chr)) {
-                    // Avoid unknown protocol triggering an additional error
+                    //当前字符不是：$%&'()*+,-./0-9:;=?@A-Z[]_a-z~
                     request.protocol().setString(Constants.HTTP_11);
-                    // This is a general check that aims to catch problems early
-                    // Detailed checking of each part of the request target will
-                    // happen in Http11Processor#prepareRequest()
                     String invalidRequestTarget = parseInvalid(parsingRequestLineStart, byteBuffer);
                     throw new IllegalArgumentException(sm.getString("iib.invalidRequestTarget", invalidRequestTarget));
                 }
             }
 
-            //设置URI，将结果放到request.uriMB中
             if (parsingRequestLineQPos >= 0) {
-                //设置request.queryMB的值
+                //含请求参数，设置request.queryMB的值
+                //请求参数若是URL编码结果，会在后面进行URL解码
                 request.queryString().setBytes(byteBuffer.array(), parsingRequestLineQPos + 1,
                         end - parsingRequestLineQPos - 1);
 
@@ -551,8 +541,7 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                 request.requestURI().setBytes(byteBuffer.array(), parsingRequestLineStart,
                         parsingRequestLineQPos - parsingRequestLineStart);
             } else {
-
-                //如果没有带参数，则仅设置request.uriMB的值
+                //如果没带请求参数，则仅设置request.uriMB的值
                 request.requestURI().setBytes(byteBuffer.array(), parsingRequestLineStart,
                         end - parsingRequestLineStart);
             }
@@ -563,16 +552,11 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
             }
         }
 
-
-        //** 跳过请求方式后面的空格、制表符
-        //如：------------------------------------------------------
-        // ' ' '\t' HTTP/1.1  （跳过't'和' '；此时的parsingRequestLineStart指向H的位置）
-        //------------------------------------------------------
+        //5、解析请求行的[协议及版本]部分前的准备，即：跳过请求行中[URI]后紧接着的所有空格、制表符
         if (parsingRequestLinePhase == 5) {
-            // Spec says single SP but also be tolerant of multiple and/or HT
             boolean space = true;
+
             while (space) {
-                // Read new bytes if needed
                 if (byteBuffer.position() >= byteBuffer.limit()) {
                     if (!fill(false)) {
                         return false;
@@ -584,23 +568,20 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                     byteBuffer.position(byteBuffer.position() - 1);
                 }
             }
+
+            //记录请求行中协议部分的开始位置
             parsingRequestLineStart = byteBuffer.position();
             parsingRequestLinePhase = 6;
-
-            // Mark the current buffer position
             end = 0;
         }
 
-
-        //** 读取协议类型及版本，设置request.protoMB的值
-        //如：------------------------------------------------------
-        // HTTP/1.1 '\n' '\r'  （获取protocol，值为HTTP/1.1）
-        //------------------------------------------------------
+        //6、正式解析请求行的[协议及版本]部分，如：HTTP/1.1
+        //解析协议及版本部分：内容只含[./0-9HPT]，不能含其他ascii码，直到遇到换行符为止
         if (parsingRequestLinePhase == 6) {
 
-            //读取最后的协议类型及版本，直到读取到回车、换行符后结束
+            //请求行读取到换行符为止
             while (!parsingRequestLineEol) {
-                // Read new bytes if needed
+
                 if (byteBuffer.position() >= byteBuffer.limit()) {
                     if (!fill(false)) {
                         return false;
@@ -611,46 +592,49 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                 prevChr = chr;
                 chr = byteBuffer.get();
                 if (chr == Constants.CR) {
-                    // Possible end of request line. Need LF next else invalid.
+                    //跳过，校验后一个字节（可能是LF）
                 } else if (prevChr == Constants.CR && chr == Constants.LF) {
-                    // CRLF is the standard line terminator
-                    //此时已经读取到了回车、换行符，无需再继续读....
-                    end = pos - 1;//记录协议及版本号内容的终止位置，不包含当前的回车、换行符位置，所以要减一
+                    // CRLF - 表面请求行解析结束
+                    end = pos - 1;
+                    // 请求行解析结束
                     parsingRequestLineEol = true;
                 } else if (chr == Constants.LF) {
-                    // LF is an optional line terminator
+                    //LF - 可选的请求行解析结束
                     end = pos;
                     parsingRequestLineEol = true;
                 } else if (prevChr == Constants.CR || !HttpParser.isHttpProtocol(chr)) {
+                    //错误格式：
+                    // 1、上个字节是CR，当前字节不是LF
+                    // 2、当前字符不在 ./0-9HPT 中
                     String invalidProtocol = parseInvalid(parsingRequestLineStart, byteBuffer);
                     throw new IllegalArgumentException(sm.getString("iib.invalidHttpProtocol", invalidProtocol));
                 }
             }
 
-            //读取协议类型及版本.....
+            //读取协议类型及版本
             if ((end - parsingRequestLineStart) > 0) {
                 request.protocol().setBytes(byteBuffer.array(), parsingRequestLineStart,
                         end - parsingRequestLineStart);
                 parsingRequestLinePhase = 7;
             }
-            // If no protocol is found, the ISE below will be triggered.
         }
 
-        //读取完成....
+        //请求行解析完成
         if (parsingRequestLinePhase == 7) {
-            // 设置状态：请求行已经解析完成...
             parsingRequestLine = false;
             parsingRequestLinePhase = 0;
             parsingRequestLineEol = false;
             parsingRequestLineStart = 0;
             return true;
         }
+
         throw new IllegalStateException(sm.getString("iib.invalidPhase", Integer.valueOf(parsingRequestLinePhase)));
     }
 
 
     /**
-     * 解析HTTP请求头数据
+     * 解析HTTP请求头部分
+     * @return 是否解析请求头部分结束？ true - 解析结束，false - 尚未结束，需要等待剩余数据后继续解析
      */
     boolean parseHeaders() throws IOException {
         if (!parsingHeader) {
@@ -660,26 +644,24 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
         HeaderParseStatus status;
 
         do {
-            //循环解析每一个请求头键值对
+            //循环解析每一个header的name值和value值
             status = parseHeader();
-            // Checking that
-            // (1) Headers plus request line size does not exceed its limit
-            // (2) There are enough bytes to avoid expanding the buffer when
-            // reading body
-            // Technically, (2) is technical limitation, (1) is logical
-            // limitation to enforce the meaning of headerBufferSize
-            // From the way how buf is allocated and how blank lines are being
-            // read, it should be enough to check (1) only.
+            // 检查：
+            // (1) 请求行部分 + 请求头部分  未超过指定上限
+            // (2) byteBuffer缓冲区还有足够的空间来读取请求体
             if (byteBuffer.position() > headerBufferSize || byteBuffer.capacity() - byteBuffer.position() < socketReadBufferSize) {
                 throw new IllegalArgumentException(sm.getString("iib.requestheadertoolarge.error"));
             }
         } while (status == HeaderParseStatus.HAVE_MORE_HEADERS);
 
+
         if (status == HeaderParseStatus.DONE) {
+            //请求头已经解析完成
             parsingHeader = false;
             end = byteBuffer.position();
             return true;
         } else {
+            //请求头尚未解析完成
             return false;
         }
     }
@@ -825,10 +807,11 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
     // --------------------------------------------------------- Private Methods
 
     /**
-     * Attempts to read some data into the input buffer.
-     *
-     * @return <code>true</code> if more data was added to the input buffer
-     *         otherwise <code>false</code>
+     * 尝试从socket通道中读取数据，并放入byteBuffer中：
+     *    若当前正在解析请求头（读取的是请求头数据），则缓存中的字节长度不能超值指定阈值[请求头字节长度有限制]
+     *    若已经解析完请求头，需要设置byteBuffer中读取请求体的位置[后续读取的数据就是请求体的数据]
+     * @param block  当没有从socket通道中读取到数据时是否需要阻塞等待数据到来？ true - 阻塞等待数据到来
+     * @return 是否读取到数据？true - 读取到数据，false - 没有可读数据
      */
     private boolean fill(boolean block) throws IOException {
 
@@ -842,7 +825,10 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                     "], end: [" + end + "]");
         }
 
+
         if (parsingHeader) {
+            //请求行、请求头解析尚未完成...
+            //请求头的数据大小不能超过上限[默认8KB]
             if (byteBuffer.limit() >= headerBufferSize) {
                 if (parsingRequestLine) {
                     // Avoid unknown protocol triggering an additional error
@@ -851,12 +837,14 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                 throw new IllegalArgumentException(sm.getString("iib.requestheadertoolarge.error"));
             }
         } else {
+            //请求头解析完成，将byteBuffer的position、limit指向请求头数据结束的位置（请求头开始的位置）
             byteBuffer.limit(end).position(end);
         }
 
-        int nRead = -1;
+        int nRead;
         int mark = byteBuffer.position();
         try {
+
             if (byteBuffer.position() < byteBuffer.limit()) {
                 byteBuffer.position(byteBuffer.limit());
             }
@@ -905,54 +893,86 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
 
 
     /**
+     * <pre>
      * 解析请求头中的键值对(name=value)，每次调用该方法只解析一个请求头
+     *    1、请求行与请求头之间只能包含一个换行符
+     *    2、请求头的header的name与value以冒号分割；name只能含ascii，且字符只能是小写；多个值用逗号隔开，如：Accept-Language: en-US, en;q=0.5
+     *    3、header与header之间以换行符分割
+     *    4、若请求行后面紧接2个换行符，表示请求头解析结束
+     *    5、若一个header后面紧接2个换行符，表示请求头解析结束
+     *    <b>注意： 1、读取到连续2个换行符表示请求头部分解析结束 </b>
+     *    <b>      2、一个header可以包含跨行的value值（换行后另一行紧接着一个空格和制表符，或2个空格），如：
+     *          |Content-Type: text/html;
+     *          |  charset=UTF-8
+     *    </b>
+     *
+     *
+     * 返回的解析状态：
+     *     1、HeaderParseStatus.NEED_MORE_DATA        数据不完整，需要等待请求头剩余数据到达
+     *     2、HeaderParseStatus.DONE                  请求头部分已经解析完成（可能没有请求头数据）
+     *     3、HeaderParsePosition.HEADER_SKIPLINE     跳过当前行
+     *     4、HeaderParsePosition.HEADER_START        解析header的name前的准备，如：略过换行符，记录name的起始位置...
+     *     5、HeaderParsePosition.HEADER_NAME         开始解析header的name（直到冒号为止）
+     *     6、HeaderParsePosition.HEADER_VALUE_START  解析header的value前的准备，如：略过前面的空格，记录value的起始位置
+     *     7、HeaderParsePosition.HEADER_VALUE        开始解析header的value（直到换行符为止）
+     *     8、HeaderParsePosition.HEADER_MULTI_LINE   header可能含多个value值，且value值可能是跨行的（跨行的值通常需要连续2个空格开头）
+     *     9、HeaderParseStatus.HAVE_MORE_HEADERS     继续解析下一个header
+     * </pre>
      */
     private HeaderParseStatus parseHeader() throws IOException {
 
+        //** 注意：请求行部分与请求头部分之间[仅包含一个换行符]  **
 
-        //跳过前面的回车、换行符....
+        //尝试解析请求头部分：
+        // 1、请求行和请求头之间只含一个换行符，若有连续2个换行符表示请求头部分没有数据，终止请求头解析
+        // 2、请求行与请求头，请求头的header与header之间都只含有一个换行符，略过换行符
         while (headerParsePos == HeaderParsePosition.HEADER_START) {
-            // Read new bytes if needed
+
             if (byteBuffer.position() >= byteBuffer.limit()) {
                 if (!fill(false)) {
                     return HeaderParseStatus.NEED_MORE_DATA;
                 }
             }
 
+            //请求行解析完后，prevChr = chr = LF
             prevChr = chr;
             chr = byteBuffer.get();
 
             if (chr == Constants.CR && prevChr != Constants.CR) {
-                // Possible start of CRLF - process the next byte.
+                // prevChr=LF（请求行结束位置的换行符），chr=CR（紧接着的还是换行符？）
+                //若下一个字节是LF，则有连续2个换行符，表示没有请求头部分
             } else if (chr == Constants.LF) {
-                //在解析下一个请求头键值对前就捕捉到了换行符，说明请求头已经解析完成，直接退出
+                //解析到换行符（请求行后面的换行符后紧接着还有一个换行符），表示没有请求头部分，终止请求头部分解析
                 return HeaderParseStatus.DONE;
             } else {
+                //没有换行符，需要解析请求头
                 if (prevChr == Constants.CR) {
-                    // Must have read two bytes (first was CR, second was not LF)
+                    //前一个字节是CR，第二个字节不是LF，不算换行符，回退2个位置（当前字节和前一个位置CR）
                     byteBuffer.position(byteBuffer.position() - 2);
                 } else {
-                    // Must have only read one byte
+                    //回退一个位置（当前字节）
                     byteBuffer.position(byteBuffer.position() - 1);
                 }
                 break;
             }
         }
 
-        //记录读取请求头的位置信息
+        //2、标记好缓冲区中解析请求头数据的起始位置，下一步开始解析第一个header
         if (headerParsePos == HeaderParsePosition.HEADER_START) {
-            // Mark the current buffer position
+            //缓冲区中请求头数据的开始位置
             headerData.start = byteBuffer.position();
             headerData.lineStart = headerData.start;
+            //下一步开始解析header的name
             headerParsePos = HeaderParsePosition.HEADER_NAME;
         }
 
 
         //** 解析请求头中的name（名称必须是US-ASCII，name若包含字母必须小写）：
-        // 向headers中添加一个请求头键值对，并设置其name值
+        // 每一个header的name和value以冒号分割（:），header与header之间以分号隔开（;）
+        // 所有header中的name含有的字符必须是小写
+        // 每一个header独占一行
         while (headerParsePos == HeaderParsePosition.HEADER_NAME) {
 
-            // Read new bytes if needed
             if (byteBuffer.position() >= byteBuffer.limit()) {
                 if (!fill(false)) {
                     return HeaderParseStatus.NEED_MORE_DATA;
@@ -961,38 +981,37 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
 
             int pos = byteBuffer.position();
             chr = byteBuffer.get();
-            //COLON  冒号(:)
+            //COLON - 冒号(:)
             if (chr == Constants.COLON) {
-                //标志后续要读取请求头的value值
+                //header的name已解析完成，遇到冒号，下一步开始解析value值
                 headerParsePos = HeaderParsePosition.HEADER_VALUE_START;
 
-                //读取请求头的name值
+                //添加header的name到headers中
                 headerData.headerValue = headers.addValue(byteBuffer.array(), headerData.start,
                         pos - headerData.start);
                 pos = byteBuffer.position();
-                // Mark the current buffer position
+                //记录value的起始位置
                 headerData.start = pos;
                 headerData.realPos = pos;
                 headerData.lastSignificantChar = pos;
                 break;
             } else if (!HttpParser.isToken(chr)) {
-                // Non-token characters are illegal in header names
-                // Parsing continues so the error can be reported in context
+                //若header的name部分含有非法字符时：
+                //  当rejectIllegalHeader=false时，忽略当前解析的行，从新从下一行开始解析请求头
+                //  当rejectIllegalHeader=true时，直接抛异常并终止整个请求
                 headerData.lastSignificantChar = pos;
                 byteBuffer.position(byteBuffer.position() - 1);
-                // skipLine() will handle the error
                 return skipLine();
             }
 
-            // chr is next byte of header name. Convert to lowercase.
-            //将请求头的name值转为小写
+            //header的name值中的字符若是大写，需转为小写
             if ((chr >= Constants.A) && (chr <= Constants.Z)) {
                 byteBuffer.put(pos, (byte) (chr - Constants.LC_OFFSET));
             }
         }
 
         if (headerParsePos == HeaderParsePosition.HEADER_SKIPLINE) {
-            //忽略当前的请求头键值对
+            //忽略当前行
             return skipLine();
         }
 
@@ -1001,22 +1020,18 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                headerParsePos == HeaderParsePosition.HEADER_VALUE ||
                headerParsePos == HeaderParsePosition.HEADER_MULTI_LINE) {
 
-            //开始解析请求头的value
+            //跳过value前的所有空格、制表符
             if (headerParsePos == HeaderParsePosition.HEADER_VALUE_START) {
-                //跳过所有空格、制表符
                 while (true) {
-                    // Read new bytes if needed
+
                     if (byteBuffer.position() >= byteBuffer.limit()) {
-                        if (!fill(false)) {// parse header
-                            // HEADER_VALUE_START
+                        if (!fill(false)) {
                             return HeaderParseStatus.NEED_MORE_DATA;
                         }
                     }
 
                     chr = byteBuffer.get();
-                    //略过请求头name后面的所有空格、制表符
                     if (!(chr == Constants.SP || chr == Constants.HT)) {
-                        //定位到请求头name对应的value
                         headerParsePos = HeaderParsePosition.HEADER_VALUE;
                         byteBuffer.position(byteBuffer.position() - 1);
                         break;
@@ -1024,17 +1039,13 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                 }
             }
 
-
+            //记录当前header行的value的结束位置（读到当前header末尾的第一个换行符截止）
             if (headerParsePos == HeaderParsePosition.HEADER_VALUE) {
-
-                // Reading bytes until the end of the line
                 boolean eol = false;
                 while (!eol) {
 
-                    // Read new bytes if needed
                     if (byteBuffer.position() >= byteBuffer.limit()) {
-                        if (!fill(false)) {// parse header
-                            // HEADER_VALUE
+                        if (!fill(false)) {
                             return HeaderParseStatus.NEED_MORE_DATA;
                         }
                     }
@@ -1047,12 +1058,11 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                         // 如果是CR+LF或者是LF，则表示已经读取到当前value值的结尾，终止读取...
                         eol = true;
                     } else if (prevChr == Constants.CR) {
-                        //若当前字节（chr）不是CR获LF，但前一个字节是CR，则为非法换行，非法数据，删除本次的请求头键值对...
+                        //出现单独CR（没有LF，非法数据），从headers中移除本次的header
                         headers.removeHeader(headers.size() - 1);
                         return skipLine();
                     } else if (chr != Constants.HT && HttpParser.isControl(chr)) {
-                        // Invalid value
-                        // Delete the header (it will be the most recent one)
+                        //非法字符（0-31共32个控制字符，127 DEL控制字符），从headers中移除当前header
                         headers.removeHeader(headers.size() - 1);
                         return skipLine();
                     } else if (chr == Constants.SP || chr == Constants.HT) {
@@ -1065,31 +1075,31 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                     }
                 }
 
-                // Ignore whitespaces at the end of the line
+                //记录当前header的value值的终止位置
                 headerData.realPos = headerData.lastSignificantChar;
-
-                // Checking the first character of the new line. If the character
-                // is a LWS, then it's a multiline header
+                //当前header的value值可能有多个值，且值跨行
                 headerParsePos = HeaderParsePosition.HEADER_MULTI_LINE;
             }
 
 
-            // Read new bytes if needed
+            //这里继续从socket缓冲区读数据的作用是：
+            // 1、当前header已经解析完（包括这一行结尾的换行符），但要获取下一个header
+            // 2、当前header已经解析完（包括这一行结尾的换行符），没有下一个header，但要继续读一个换行符表示请求头部分解析完成
             if (byteBuffer.position() >= byteBuffer.limit()) {
-                if (!fill(false)) {// parse header
-                    // HEADER_MULTI_LINE
+                if (!fill(false)) {
                     return HeaderParseStatus.NEED_MORE_DATA;
                 }
             }
 
+            //若换行符后面还有换行符，则终止请求头解析
             byte peek = byteBuffer.get(byteBuffer.position());
             if (headerParsePos == HeaderParsePosition.HEADER_MULTI_LINE) {
+                //尝试继续解析下一个header
                 if ((peek != Constants.SP) && (peek != Constants.HT)) {
                     headerParsePos = HeaderParsePosition.HEADER_START;
                     break;
                 } else {
-                    // Copying one extra space in the buffer (since there must
-                    // be at least one space inserted between the lines)
+                    //跨行的value值前面需有2个空格
                     byteBuffer.put(headerData.realPos, peek);
                     headerData.realPos++;
                     headerParsePos = HeaderParsePosition.HEADER_VALUE_START;
@@ -1097,7 +1107,7 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
             }
         }
 
-        //对上述headers新增的键值对的name值设置其对应的value值
+        //设置当前header的value值
         headerData.headerValue.setBytes(byteBuffer.array(), headerData.start,
                 headerData.lastSignificantChar - headerData.start);
         headerData.recycle();

@@ -16,58 +16,60 @@
  */
 package org.apache.tomcat.websocket.pojo;
 
-import java.io.InputStream;
-import java.io.Reader;
-import java.lang.annotation.Annotation;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import javax.websocket.CloseReason;
-import javax.websocket.DecodeException;
-import javax.websocket.Decoder;
-import javax.websocket.DeploymentException;
-import javax.websocket.EndpointConfig;
-import javax.websocket.MessageHandler;
-import javax.websocket.OnClose;
-import javax.websocket.OnError;
-import javax.websocket.OnMessage;
-import javax.websocket.OnOpen;
-import javax.websocket.PongMessage;
-import javax.websocket.Session;
-import javax.websocket.server.PathParam;
-
 import org.apache.tomcat.InstanceManager;
 import org.apache.tomcat.util.res.StringManager;
 import org.apache.tomcat.websocket.DecoderEntry;
 import org.apache.tomcat.websocket.Util;
 import org.apache.tomcat.websocket.Util.DecoderMatch;
 
+import javax.websocket.*;
+import javax.websocket.server.PathParam;
+import java.io.InputStream;
+import java.io.Reader;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.nio.ByteBuffer;
+import java.util.*;
+
 /**
- * For a POJO class annotated with
- * {@link javax.websocket.server.ServerEndpoint}, an instance of this class
- * creates and caches the method handler, method information and parameter
- * information for the onXXX calls.
+ * 对含@ServerEndpoint注解的类进行解析，使用能够满足与Endpoint定义相同的功能
+ * 将其中含有@OnOpen、@OnClose、@OnError、@OnMessage注解的方法信息进行缓存，便于后续调用
+ * onOpen、onClose、onError方法可以含除Session、EndpointConfig、CloseReason、Throwable外的其他参数，但必须是含@PathParam注解的
  */
 public class PojoMethodMapping {
 
     private static final StringManager sm =
             StringManager.getManager(PojoMethodMapping.class);
 
+    //类似于Endpoint#onOpen(Session,EndpointConfig)方法
+    //可以含Session、EndpointConfig或其他类型参数，也可以无参（与Endpoint不同）
     private final Method onOpen;
+
+    //类似于Endpoint#onClose(Session,CloseReason)方法
+    //可以含Session、CloseReason或其他类型，也可以无参（与Endpoint不同）
     private final Method onClose;
+
+    //类似于Endpoint#onError(Session,Throwable)方法
+    //必须含Throwable，可以含Session或其他类型（与Endpoint不同）
     private final Method onError;
+
+    //记录onOpen方法含有的参数类型及其对应的参数名称
+    //可以是空数组，也可以含Session、EndpointConfig或其他类型的参数类型和参数名称
     private final PojoPathParam[] onOpenParams;
+
+    //记录onClose方法含有的参数类型及其对应的参数名称
+    //可以是空数组，也可以含Session、CloseReason或其他类型的参数类型和参数名称
     private final PojoPathParam[] onCloseParams;
+
+    //记录onError方法含有的参数类型及其对应的参数名称
+    //必须含Throwable的参数类型和参数名称，也可以含Session或其他类型的参数类型和参数名称
     private final PojoPathParam[] onErrorParams;
+
+    //含@OnMessage注解的方法包装集合
     private final List<MessageHandlerInfo> onMessage = new ArrayList<>();
+
+    //websocket服务端点的服务路径
     private final String wsPath;
 
 
@@ -106,16 +108,25 @@ public class PojoMethodMapping {
         this.wsPath = wsPath;
 
         List<DecoderEntry> decoders = Util.getDecoders(decoderClazzes, instanceManager);
+
+        //遍历类的每个方法，获取指定的Method ：
+        //   open - 含@OnOpen注解的方法（必须public）
+        //   close - 含OnClose注解的方法（必须public）
+        //   error - 含OnError注解的方法（必须public）
         Method open = null;
         Method close = null;
         Method error = null;
         Method[] clazzPojoMethods = null;
         Class<?> currentClazz = clazzPojo;
+
         while (!currentClazz.equals(Object.class)) {
+
             Method[] currentClazzMethods = currentClazz.getDeclaredMethods();
             if (currentClazz == clazzPojo) {
                 clazzPojoMethods = currentClazzMethods;
             }
+
+            //处理类的每个Method：
             for (Method method : currentClazzMethods) {
                 if (method.isSynthetic()) {
                     // Skip all synthetic methods.
@@ -124,6 +135,8 @@ public class PojoMethodMapping {
                     // (they always use Object) so we can't used them here.
                     continue;
                 }
+
+                //方法（必须是public）含@OnOpen
                 if (method.getAnnotation(OnOpen.class) != null) {
                     checkPublic(method);
                     if (open == null) {
@@ -218,8 +231,12 @@ public class PojoMethodMapping {
         this.onOpen = open;
         this.onClose = close;
         this.onError = error;
+
+        //onOpen方法的参数：可以含Session、EndpointConfig，也可以无参...
         onOpenParams = getPathParams(onOpen, MethodType.ON_OPEN);
+        //onClose方法的参数：可以含Session、CloseReason，也可以无参...
         onCloseParams = getPathParams(onClose, MethodType.ON_CLOSE);
+        //onError方法的参数：必须含Throwable，可以含Session...
         onErrorParams = getPathParams(onError, MethodType.ON_ERROR);
     }
 
@@ -359,6 +376,13 @@ public class PojoMethodMapping {
     }
 
 
+    /**
+     * <pre>
+     * 构建方法的参数（按方法中定义的参数位置排序返回）
+     *   - pathParams 含参数中定义的参数位置、类型，参数名称
+     *   - pathParameters 实际含有的参数值（除session、config、throwable、closeReason等特殊类型的参数外），会尝试将其转为期望的类型
+     * </pre>
+     */
     private static Object[] buildArgs(PojoPathParam[] pathParams,
             Map<String,String> pathParameters, Session session,
             EndpointConfig config, Throwable throwable, CloseReason closeReason)
@@ -392,7 +416,10 @@ public class PojoMethodMapping {
 
     private static class MessageHandlerInfo {
 
+        //含@OnMessage注解的方法
         private final Method m;
+
+        //记录方法每个位置参数的类型
         private int indexString = -1;
         private int indexByteArray = -1;
         private int indexByteBuffer = -1;
@@ -405,6 +432,8 @@ public class PojoMethodMapping {
         private Map<Integer,PojoPathParam> indexPathParams = new HashMap<>();
         private int indexPayload = -1;
         private DecoderMatch decoderMatch = null;
+
+        //消息限制上限
         private long maxMessageSize = -1;
 
         public MessageHandlerInfo(Method m, List<DecoderEntry> decoderEntries)

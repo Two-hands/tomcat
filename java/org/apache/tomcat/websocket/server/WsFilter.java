@@ -16,15 +16,10 @@
  */
 package org.apache.tomcat.websocket.server;
 
-import java.io.IOException;
-
-import javax.servlet.FilterChain;
-import javax.servlet.GenericFilter;
-import javax.servlet.ServletException;
-import javax.servlet.ServletRequest;
-import javax.servlet.ServletResponse;
+import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
 
 /**
  * Handles the initial HTTP connection for WebSocket connections.
@@ -47,18 +42,19 @@ public class WsFilter extends GenericFilter {
     public void doFilter(ServletRequest request, ServletResponse response,
             FilterChain chain) throws IOException, ServletException {
 
-        // This filter only needs to handle WebSocket upgrade requests
+        // 1、WsServerContainer中有注册了WsServerEndpoint；
+        // 2、并且请求方式为GET，请求头中含Upgrade=websocket；
+        // 以上2个条件都满足，将进行websocket升级处理....
         if (!sc.areEndpointsRegistered() ||
                 !UpgradeUtil.isWebSocketUpgradeRequest(request, response)) {
             chain.doFilter(request, response);
             return;
         }
 
-        // HTTP request with an upgrade header for WebSocket present
         HttpServletRequest req = (HttpServletRequest) request;
         HttpServletResponse resp = (HttpServletResponse) response;
 
-        // Check to see if this WebSocket implementation has a matching mapping
+        // 确认请求路径是否匹配websocket的mapping....
         String path;
         String pathInfo = req.getPathInfo();
         if (pathInfo == null) {
@@ -66,15 +62,17 @@ public class WsFilter extends GenericFilter {
         } else {
             path = req.getServletPath() + pathInfo;
         }
+
+        //根据请求路径获取websocket的mapping
         WsMappingResult mappingResult = sc.findMapping(path);
 
         if (mappingResult == null) {
-            // No endpoint registered for the requested path. Let the
-            // application handle it (it might redirect or forward for example)
+            //已注册的websocket服务端点没有与当前的请求路径匹配成功，则不当做websocket处理....
             chain.doFilter(request, response);
             return;
         }
 
+        //当前http/https请求是websocket升级请求，开始升级为websocket协议并处理连接...
         UpgradeUtil.doUpgrade(sc, req, resp, mappingResult.getConfig(),
                 mappingResult.getPathParams());
     }

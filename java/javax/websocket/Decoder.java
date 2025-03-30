@@ -21,32 +21,27 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.nio.ByteBuffer;
 
+/**
+ * websocket通讯时的解码器，从对端接收数据，解码后使用....
+ */
 public interface Decoder {
 
-    /**
-     * Initialise the decoder.
-     *
-     * @param endpointConfig The end-point configuration
-     */
-    abstract void init(EndpointConfig endpointConfig);
 
     /**
-     * Destroy the decoder.
+     * 解码器的初始化...
+     * @param endpointConfig  websocket端点配置类
      */
-    abstract void destroy();
+    void init(EndpointConfig endpointConfig);
 
-    interface Binary<T> extends Decoder {
+    /**
+     * 解码器的销毁...
+     */
+    void destroy();
 
-        T decode(ByteBuffer bytes) throws DecodeException;
-
-        boolean willDecode(ByteBuffer bytes);
-    }
-
-    interface BinaryStream<T> extends Decoder {
-
-        T decode(InputStream is) throws DecodeException, IOException;
-    }
-
+    /**
+     * 文本类解码器，将字符串转换为指定类型
+     * @param <T> 解码后的类型
+     */
     interface Text<T> extends Decoder {
 
         T decode(String s) throws DecodeException;
@@ -54,8 +49,35 @@ public interface Decoder {
         boolean willDecode(String s);
     }
 
+
+    /**
+     * 类字符流解码器，从Reader字符流中读取字节数组，将其转换为指定类型
+     * @param <T> 解码后的类型
+     */
     interface TextStream<T> extends Decoder {
 
         T decode(Reader reader) throws DecodeException, IOException;
+    }
+
+
+    /**
+     * 字节块解码器，从ByteBuffer中读取字节数组，将其转换为指定类型
+     * @param <T> 解码后的类型
+     */
+    interface Binary<T> extends Decoder {
+
+        T decode(ByteBuffer bytes) throws DecodeException;
+
+        boolean willDecode(ByteBuffer bytes);
+    }
+
+
+    /**
+     * 字节流解码器，从InputStream读取字节数组，将其转换为指定类型
+     * @param <T> 解码后的类型
+     */
+    interface BinaryStream<T> extends Decoder {
+
+        T decode(InputStream is) throws DecodeException, IOException;
     }
 }

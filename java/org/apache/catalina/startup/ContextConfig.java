@@ -39,6 +39,7 @@ import org.apache.tomcat.util.file.ConfigFileLoader;
 import org.apache.tomcat.util.file.ConfigurationSource;
 import org.apache.tomcat.util.res.StringManager;
 import org.apache.tomcat.util.scan.JarFactory;
+import org.apache.tomcat.websocket.server.WsSci;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXParseException;
 
@@ -1794,6 +1795,9 @@ public class ContextConfig implements LifecycleListener {
             return;
         }
 
+        //添加一个ServletContainerInitializer，用于支持WebSocket
+        detectedScis = addWebSocketServletContainerInitializer(detectedScis);
+
         for (ServletContainerInitializer sci : detectedScis) {
             initializerClassMap.put(sci, new HashSet<>());
 
@@ -1834,6 +1838,15 @@ public class ContextConfig implements LifecycleListener {
                 scis.add(sci);
             }
         }
+    }
+
+    private List<ServletContainerInitializer> addWebSocketServletContainerInitializer(List<ServletContainerInitializer> detectedScis) {
+        if (null == detectedScis || detectedScis.isEmpty()){
+            return Collections.singletonList(new WsSci());
+        }
+
+        detectedScis.add(new WsSci());
+        return detectedScis;
     }
 
 

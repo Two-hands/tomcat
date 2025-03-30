@@ -16,6 +16,11 @@
  */
 package org.apache.tomcat.util.net;
 
+import org.apache.juli.logging.Log;
+import org.apache.juli.logging.LogFactory;
+import org.apache.tomcat.util.ExceptionUtils;
+import org.apache.tomcat.util.res.StringManager;
+
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
@@ -30,11 +35,6 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-
-import org.apache.juli.logging.Log;
-import org.apache.juli.logging.LogFactory;
-import org.apache.tomcat.util.ExceptionUtils;
-import org.apache.tomcat.util.res.StringManager;
 
 public abstract class SocketWrapperBase<E> {
 
@@ -55,6 +55,8 @@ public abstract class SocketWrapperBase<E> {
     protected volatile IOException previousIOException = null;
 
     private volatile int keepAliveLeft = 100;
+
+    //是否协议升级？true - 发生协议升级（如http升级为web-socket）
     private volatile boolean upgraded = false;
     private boolean secure = false;
     private String negotiatedProtocol = null;
@@ -255,6 +257,10 @@ public abstract class SocketWrapperBase<E> {
     public void setKeepAliveLeft(int keepAliveLeft) { this.keepAliveLeft = keepAliveLeft; }
     public int decrementKeepAlive() { return (--keepAliveLeft); }
 
+    public int getKeepAliveLeft(){
+        return keepAliveLeft;
+    }
+
     public String getRemoteHost() {
         if (remoteHost == null) {
             populateRemoteHost();
@@ -413,9 +419,10 @@ public abstract class SocketWrapperBase<E> {
 
 
     /**
-     * Close the socket wrapper.
+     * 关闭SocketWrapper：
      */
     public void close() {
+
         if (closed.compareAndSet(false, true)) {
             try {
                 getEndpoint().getHandler().release(this);

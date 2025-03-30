@@ -16,11 +16,11 @@
  */
 package org.apache.coyote;
 
+import org.apache.tomcat.util.net.SSLHostConfig;
+
 import java.lang.reflect.InvocationTargetException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
-
-import org.apache.tomcat.util.net.SSLHostConfig;
 
 /**
  * Abstract the protocol implementation, including threading, etc.
@@ -36,38 +36,36 @@ import org.apache.tomcat.util.net.SSLHostConfig;
 public interface ProtocolHandler {
 
     /**
-     * Return the adapter associated with the protocol handler.
-     * @return the adapter
+     * 从协议处理器中获取适配器
+     * @return 适配器
      */
     public Adapter getAdapter();
 
 
     /**
-     * The adapter, used to call the connector.
-     *
-     * @param adapter The adapter to associate
+     * 向协议处理器中添加适配器
+     * @param adapter 适配器
      */
     public void setAdapter(Adapter adapter);
 
 
     /**
-     * The executor, provide access to the underlying thread pool.
-     *
-     * @return The executor used to process requests
+     * 获取线程池（用于处理请求）
+     * @return 线程池
      */
     public Executor getExecutor();
 
 
     /**
-     * Set the optional executor that will be used by the connector.
-     * @param executor the executor
+     * 设置线程池（会被连接器用于处理请求）
+     * @param executor 线程池
      */
     public void setExecutor(Executor executor);
 
 
     /**
-     * Get the utility executor that should be used by the protocol handler.
-     * @return the executor
+     * 获取定时线程池
+     * @return 定时线程池
      */
     public ScheduledExecutorService getUtilityExecutor();
 
@@ -76,117 +74,101 @@ public interface ProtocolHandler {
      * Set the utility executor that should be used by the protocol handler.
      * @param utilityExecutor the executor
      */
+    /**
+     * 设置定时线程池
+     * @param utilityExecutor 定时线程池
+     */
     public void setUtilityExecutor(ScheduledExecutorService utilityExecutor);
 
 
     /**
-     * Initialise the protocol.
-     *
-     * @throws Exception If the protocol handler fails to initialise
+     * 初始化协议处理器
+     * @throws Exception 初始化过程可能抛出的异常
      */
     public void init() throws Exception;
 
 
     /**
-     * Start the protocol.
-     *
-     * @throws Exception If the protocol handler fails to start
+     * 启动初始化处理器
+     * @throws Exception 启动过程中可能出现的异常
      */
     public void start() throws Exception;
 
 
     /**
-     * Pause the protocol (optional).
-     *
-     * @throws Exception If the protocol handler fails to pause
+     * 尝试暂停协议处理器
+     * @throws Exception 若协议处理器暂停失败
      */
     public void pause() throws Exception;
 
 
     /**
-     * Resume the protocol (optional).
-     *
-     * @throws Exception If the protocol handler fails to resume
+     * 尝试恢复协议处理器
+     * @throws Exception 若协议处理器恢复失败
      */
     public void resume() throws Exception;
 
 
     /**
-     * Stop the protocol.
-     *
-     * @throws Exception If the protocol handler fails to stop
+     * 尝试停止协议处理器
+     * @throws Exception 若协议处理器停止失败
      */
     public void stop() throws Exception;
 
 
     /**
-     * Destroy the protocol (optional).
-     *
-     * @throws Exception If the protocol handler fails to destroy
+     * 尝试销毁协议处理器
+     * @throws Exception 若协议处理器销毁失败
      */
     public void destroy() throws Exception;
 
 
     /**
-     * Close the server socket (to prevent further connections) if the server
-     * socket was bound on {@link #start()} (rather than on {@link #init()}
-     * but do not perform any further shutdown.
+     * 若ServerSocket的绑定操作（定义监听端口）发生在{@link #start()}方法而不是{@link #init()}方法[即bindState=BindState.BOUND_ON_START]，
+     * 尝试关闭ServerSocket以避免进一步的客户端连接，但是不要进行关闭操作。
      */
     public void closeServerSocketGraceful();
 
-
     /**
-     * Wait for the client connections to the server to close gracefully. The
-     * method will return when all of the client connections have closed or the
-     * method has been waiting for {@code waitTimeMillis}.
-     *
-     * @param waitMillis    The maximum time to wait in milliseconds for the
-     *                      client connections to close.
-     *
-     * @return The wait time, if any remaining when the method returned
+     * 等待与服务端通信的客户端连接正常关闭，当所有客户端连接均已关闭 或 此方法等待waitMillis毫秒后返回
+     * @param waitMillis 最大等待所有客户端连接关闭的时长
+     * @return 返回方法等待所有关闭客户端连接后还剩余的时间（即：total waitMillis - consumption time）
      */
     public long awaitConnectionsClose(long waitMillis);
 
 
     /**
-     * Requires APR/native library
-     *
-     * @return <code>true</code> if this Protocol Handler requires the
-     *         APR/native library, otherwise <code>false</code>
-     *
-     * @deprecated This method will be removed in Tomcat 10.1.x onwards
+     * 是否需要APR本地库？
+     * @return  true - 协议处理器需要APR本地库
      */
     @Deprecated
     public boolean isAprRequired();
 
 
     /**
-     * Does this ProtocolHandler support sendfile?
-     *
-     * @return <code>true</code> if this Protocol Handler supports sendfile,
-     *         otherwise <code>false</code>
+     * 协议处理器是否支持sendFile？
+     * @return true - 支持snedFile
      */
     public boolean isSendfileSupported();
 
 
     /**
-     * Add a new SSL configuration for a virtual host.
-     * @param sslHostConfig the configuration
+     * 添加SSL配置
+     * @param sslHostConfig SSL配置
      */
     public void addSslHostConfig(SSLHostConfig sslHostConfig);
 
 
     /**
-     * Find all configured SSL virtual host configurations which will be used
-     * by SNI.
-     * @return the configurations
+     * 获取所有SSL配置
+     * @return SSL配置数组
      */
     public SSLHostConfig[] findSslHostConfigs();
 
 
     /**
-     * Add a new protocol for used by HTTP/1.1 upgrade or ALPN.
-     * @param upgradeProtocol the protocol
+     * 添加一个新协议，供HTTP/1.1升级或ALPN使用
+     * @param upgradeProtocol 升级协议
      */
     public void addUpgradeProtocol(UpgradeProtocol upgradeProtocol);
 
@@ -195,14 +177,17 @@ public interface ProtocolHandler {
      * Return all configured upgrade protocols.
      * @return the protocols
      */
+
+    /**
+     * 获取所有升级协议
+     * @return 升级协议数组
+     */
     public UpgradeProtocol[] findUpgradeProtocols();
 
 
     /**
-     * Some protocols, like AJP, have a packet length that
-     * shouldn't be exceeded, and this can be used to adjust the buffering
-     * used by the application layer.
-     * @return the desired buffer size, or -1 if not relevant
+     * 一些协议（如：AJP）有数据包长度限制，这个配置可以用于在应用层调整使用的缓冲区
+     * @return 所需的缓冲区大小，如果无关，则为-1
      */
     public default int getDesiredBufferSize() {
         return -1;
@@ -210,10 +195,8 @@ public interface ProtocolHandler {
 
 
     /**
-     * The default behavior is to identify connectors uniquely with address
-     * and port. However, certain connectors are not using that and need
-     * some other identifier, which then can be used as a replacement.
-     * @return the id
+     * 默认是使用IP地址和端口号组合作为连接的唯一标识。可是某些连接不适用此方式，可以使用此这个方式去替代
+     * @return 连接的唯一标识
      */
     public default String getId() {
         return null;
@@ -221,28 +204,23 @@ public interface ProtocolHandler {
 
 
     /**
-     * Create a new ProtocolHandler for the given protocol.
-     * @param protocol the protocol
-     * @param apr if <code>true</code> the APR protcol handler will be used
-     * @return the newly instantiated protocol handler
-     * @throws ClassNotFoundException Specified protocol was not found
-     * @throws InstantiationException Specified protocol could not be instantiated
-     * @throws IllegalAccessException Exception occurred
-     * @throws IllegalArgumentException Exception occurred
-     * @throws InvocationTargetException Exception occurred
-     * @throws NoSuchMethodException Exception occurred
-     * @throws SecurityException Exception occurred
+     * 通过给定的协议创建具体的协议处理器
+     * @param protocol 协议名称
+     * @param apr 是否使用arp协议？
+     * @return 协议处理器
      */
     @SuppressWarnings("deprecation")
     public static ProtocolHandler create(String protocol, boolean apr)
             throws ClassNotFoundException, InstantiationException, IllegalAccessException,
             IllegalArgumentException, InvocationTargetException, NoSuchMethodException, SecurityException {
+
         if (protocol == null || "HTTP/1.1".equals(protocol)
                 || (!apr && org.apache.coyote.http11.Http11NioProtocol.class.getName().equals(protocol))
                 || (apr && org.apache.coyote.http11.Http11AprProtocol.class.getName().equals(protocol))) {
             if (apr) {
                 return new org.apache.coyote.http11.Http11AprProtocol();
             } else {
+                //大多数情况都是使用HTTP/1.1协议处理器
                 return new org.apache.coyote.http11.Http11NioProtocol();
             }
         } else if ("AJP/1.3".equals(protocol)

@@ -16,19 +16,6 @@
  */
 package org.apache.tomcat.websocket.server;
 
-import java.io.IOException;
-import java.util.List;
-import java.util.Map;
-
-import javax.servlet.http.HttpSession;
-import javax.servlet.http.WebConnection;
-import javax.websocket.CloseReason;
-import javax.websocket.CloseReason.CloseCodes;
-import javax.websocket.DeploymentException;
-import javax.websocket.Endpoint;
-import javax.websocket.Extension;
-import javax.websocket.server.ServerEndpointConfig;
-
 import org.apache.coyote.http11.upgrade.InternalHttpUpgradeHandler;
 import org.apache.coyote.http11.upgrade.UpgradeInfo;
 import org.apache.juli.logging.Log;
@@ -41,6 +28,18 @@ import org.apache.tomcat.util.res.StringManager;
 import org.apache.tomcat.websocket.Transformation;
 import org.apache.tomcat.websocket.WsIOException;
 import org.apache.tomcat.websocket.WsSession;
+
+import javax.servlet.http.HttpSession;
+import javax.servlet.http.WebConnection;
+import javax.websocket.CloseReason;
+import javax.websocket.CloseReason.CloseCodes;
+import javax.websocket.DeploymentException;
+import javax.websocket.Endpoint;
+import javax.websocket.Extension;
+import javax.websocket.server.ServerEndpointConfig;
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Servlet 3.1 HTTP upgrade handler for WebSocket connections.
@@ -152,6 +151,9 @@ public class WsHttpUpgradeHandler implements InternalHttpUpgradeHandler {
     @Override
     public SocketState upgradeDispatch(SocketEvent status) {
         switch (status) {
+            //读操作：
+            // 1、 首次建立websocket连接
+            // 2、 客户端发送了消息
             case OPEN_READ:
                 try {
                     return wsFrame.notifyDataAvailable();

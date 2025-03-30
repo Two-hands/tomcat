@@ -16,13 +16,13 @@
  */
 package org.apache.tomcat.util.net;
 
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.res.StringManager;
+
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public class Acceptor<U> implements Runnable {
 
@@ -34,11 +34,11 @@ public class Acceptor<U> implements Runnable {
 
     private final AbstractEndpoint<?,U> endpoint;
     private String threadName;
-    /*
-     * Tracked separately rather than using endpoint.isRunning() as calls to
-     * endpoint.stop() and endpoint.start() in quick succession can cause the
-     * acceptor to continue running when it should terminate.
-     */
+
+
+    //用于控制acceptor是否应该停止
+    //不要使用endpoint.isRunning来控制acceptor的状态
+    // 如果使用endpoint的状态，在快速切换endpoint.stop()和endpoint.start()时可能会导致acceptor在需要停止的时候仍然在运行
     private volatile boolean stopCalled = false;
     private final CountDownLatch stopLatch = new CountDownLatch(1);
     protected volatile AcceptorState state = AcceptorState.NEW;
@@ -73,26 +73,22 @@ public class Acceptor<U> implements Runnable {
 
         try {
             // Loop until we receive a shutdown command
+
+            //循环接收客户端连接，当接收到停止命令时停止接收客户端连接
             while (!stopCalled) {
 
-                // Loop if endpoint is paused.
-                // There are two likely scenarios here.
-                // The first scenario is that Tomcat is shutting down. In this
-                // case - and particularly for the unit tests - we want to exit
-                // this loop as quickly as possible. The second scenario is a
-                // genuine pause of the connector. In this case we want to avoid
-                // excessive CPU usage.
-                // Therefore, we start with a tight loop but if there isn't a
-                // rapid transition to stop then sleeps are introduced.
-                // < 1ms       - tight loop
-                // 1ms to 10ms - 1ms sleep
-                // > 10ms      - 10ms sleep
+                //endpoint处于暂停状态时，当前acceptor线程尝试暂停
                 while (endpoint.isPaused() && !stopCalled) {
+
+                    //acceptor设置为PAUSED状态，并记录暂停起始时间
                     if (state != AcceptorState.PAUSED) {
                         pauseStart = System.nanoTime();
-                        // Entered pause state
                         state = AcceptorState.PAUSED;
                     }
+
+                    //暂停累积时间<1ms时，线程无需休眠，继续循环
+                    //暂停累积时间[1ms,10ms]时，线程休眠1ms
+                    //暂停累积事件>10ms时，线程休眠10ms
                     if ((System.nanoTime() - pauseStart) > 1_000_000) {
                         // Paused for more than 1ms
                         try {
@@ -107,31 +103,34 @@ public class Acceptor<U> implements Runnable {
                     }
                 }
 
+                //需要停止，线程终止循环，不再接收客户端连接
                 if (stopCalled) {
                     break;
                 }
+
+                //设置（恢复-若之前有暂停过）acceptor状态为RUNNING
                 state = AcceptorState.RUNNING;
 
                 try {
-                    //if we have reached max connections, wait
+                    //当前接收到的客户端连接数是否超过[限定最大连接数]？
+                    // - 若超过，当前线程阻塞，直到已有连接释放
+                    // - 若不超过，连接数加1
                     endpoint.countUpOrAwaitConnection();
 
-                    // Endpoint might have been paused while waiting for latch
-                    // If that is the case, don't accept new connections
+                    //endpoint处于暂停状态，不再接收新客户端连接
                     if (endpoint.isPaused()) {
                         continue;
                     }
 
-                    U socket = null;
+                    U socket;
                     try {
-                        // Accept the next incoming connection from the server
-                        // socket
+                        //阻塞等待一个新客户端连接到来
                         socket = endpoint.serverSocketAccept();
                     } catch (Exception ioe) {
-                        // We didn't get a socket
+                        //获取新连接失败，回滚连接数[由于上面在获取之前新增了连接数]
                         endpoint.countDownConnection();
                         if (endpoint.isRunning()) {
-                            // Introduce delay if necessary
+                            //失败后，尝试休眠当前线程，并计算下次睡眠时间[若紧接着的下次接收连接仍然失败的话]
                             errorDelay = handleExceptionWithDelay(errorDelay);
                             // re-throw
                             throw ioe;
@@ -139,17 +138,19 @@ public class Acceptor<U> implements Runnable {
                             break;
                         }
                     }
-                    // Successful accept, reset the error delay
+
+                    //接收连接成功，重置错误延迟时间
                     errorDelay = 0;
 
-                    // Configure the socket
+
                     if (!stopCalled && !endpoint.isPaused()) {
-                        // setSocketOptions() will hand the socket off to
-                        // an appropriate processor if successful
+                        log.info(String.format("******接收到新客户端连接,socketChannel[%s]", socket));
+                        //尝试将socketChannel交给Selector
                         if (!endpoint.setSocketOptions(socket)) {
                             endpoint.closeSocket(socket);
                         }
                     } else {
+                        //acceptor应该终止，或endpoint暂停时：关闭socket，客户端连接数回滚[减1]
                         endpoint.destroySocket(socket);
                     }
                 } catch (Throwable t) {

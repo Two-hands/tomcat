@@ -57,9 +57,7 @@ public class Http11Processor extends AbstractProcessor {
     private final AbstractHttp11Protocol<?> protocol;
 
 
-    /**
-     * Input.
-     */
+    //socket的输入缓存
     private final Http11InputBuffer inputBuffer;
 
 
@@ -79,33 +77,21 @@ public class Http11Processor extends AbstractProcessor {
     private int pluggableFilterIndex = Integer.MAX_VALUE;
 
 
-    /**
-     * Keep-alive.
-     */
+    //是否开启keep-alive功能？默认开启，false - 关闭keep-alive功能
     private volatile boolean keepAlive = true;
 
 
-    /**
-     * Flag used to indicate that the socket should be kept open (e.g. for keep
-     * alive or send file.
-     */
+    //socket是否要保持开启（如：用于keep alive 或 文件发送）？
     private volatile boolean openSocket = false;
 
-
-    /**
-     * Flag that indicates if the request headers have been completely read.
-     */
+    //是否请求头已经读取完成？true - 请求头已经读取完毕
     private volatile boolean readComplete = true;
 
-    /**
-     * HTTP/1.1 flag.
-     */
+    //当前请求使用的协议是HTTP/1.1？  true - 是
     private boolean http11 = true;
 
 
-    /**
-     * HTTP/0.9 flag.
-     */
+    //当前请求使用的协议是HTTP/0.9？  true - 是
     private boolean http09 = false;
 
 
@@ -228,10 +214,13 @@ public class Http11Processor extends AbstractProcessor {
     @Override
     public SocketState service(SocketWrapperBase<?> socketWrapper)
         throws IOException {
+
+        //request类型：org.apache.coyote.Request
         RequestInfo rp = request.getRequestProcessor();
+        //标记当前请求为请求体解析阶段
         rp.setStage(org.apache.coyote.Constants.STAGE_PARSE);
 
-        // Setting up the I/O
+        //初始化byteBuffer缓存大小
         setSocketWrapper(socketWrapper);
 
         // Flags
@@ -241,41 +230,49 @@ public class Http11Processor extends AbstractProcessor {
         boolean keptAlive = false;
         SendfileState sendfileState = SendfileState.DONE;
 
+        //循环处理当前socket连接：可能客户端短时间发送许多请求，可以逐一解析请求并处理...
         while (!getErrorState().isError() && keepAlive && !isAsync() && upgradeToken == null &&
                 sendfileState == SendfileState.DONE && !protocol.isPaused()) {
 
-            // Parsing the request header
             try {
-                // 1、inputBuffer.parseRequestLine()   ————  解析请求行，包括请求方式、URI、协议类型及版本
+                // ** 解析请求行，包括请求方式、URI、协议类型及版本
+                // keptAlive - 是否保持存活状态？true - 在解析请求行前获取缓冲区中数据到来前需要等待多久由keepAliveTimeout决定？
+                //protocol.getConnectionTimeout() - 设置socket的读超时时间
+                //protocol.getKeepAliveTimeout() - 设置socket的读超时时间（当keptAlive=true时生效）
                 if (!inputBuffer.parseRequestLine(keptAlive, protocol.getConnectionTimeout(),protocol.getKeepAliveTimeout())) {
 
-                    //解析失败....
                     if (inputBuffer.getParsingRequestLinePhase() == -1) {
+                        //升级为HTTP/2.0
                         return SocketState.UPGRADING;
-                    } else if (handleIncompleteRequestLineRead()) {
+                    }
+                    //请求行数据还未完整到达
+                    else if (handleIncompleteRequestLineRead()) {
+                        // 等待下次socket接收数据触发读事件
                         break;
                     }
                 }
 
-                //检测解析的请求行中的协议信息，便于决定后面如何解析请求头...
-                //设置http09、http11、keepAlive变量的值
+
+                // 根据解析请求行中的协议及版本（request.protoMB）确定本次请求要使用的协议：
+                // 如： 1、使用HTTP/0.9还是HTTP/1.0还是HTTP/1.1？（请求中未指定时默认使用HTTP/0.9）
+                //     2、是否启用keepAlive？（只有HTTP/1.1才启用）
                 prepareRequestProtocol();
 
                 if (protocol.isPaused()) {
-                    // 503 - Service unavailable
+                    //当前服务暂不可用
                     response.setStatus(503);
                     setErrorState(ErrorState.CLOSE_CLEAN, null);
                 } else {
+                    //开启keep-alive
                     keptAlive = true;
-                    // Set this every time in case limit has been changed via JMX
+
+                    //设置请求头的个数上限，默认100个
+                    //避免通过JMX修改此值，需要每次都设置一次
                     request.getMimeHeaders().setLimit(protocol.getMaxHeaderCount());
 
-                    //不解析HTTP/0.9版本的请求头，即http09=false才解析请求头
-                    //2、inputBuffer.parseHeaders()   ————   解析请求头（多个k-v键值对）
+                    //** HTTP协议版本在0.9以上，需要解析请求头（可能含多个k-v键值对）
                     if (!http09 && !inputBuffer.parseHeaders()) {
-                        // We've read part of the request, don't recycle it
-                        // instead associate it with the socket
-                        //解析请求头失败....
+                        //请求头部分解析尚未完成，等待数据到来
                         openSocket = true;
                         readComplete = false;
                         break;
@@ -311,15 +308,17 @@ public class Http11Processor extends AbstractProcessor {
                 setErrorState(ErrorState.CLOSE_CLEAN, t);
             }
 
-            // Has an upgrade been requested?
-            if (isConnectionToken(request.getMimeHeaders(), "upgrade")) {
-                // Check the protocol
-                String requestedProtocol = request.getHeader("Upgrade");
 
+            //当前请求是否要升级（即：connection=upgrade）？
+            //如：HTTP协议升级WS协议
+            if (isConnectionToken(request.getMimeHeaders(), "upgrade")) {
+                //获取升级的具体协议
+                String requestedProtocol = request.getHeader("Upgrade");
                 UpgradeProtocol upgradeProtocol = protocol.getUpgradeProtocol(requestedProtocol);
+
+                //当前服务器支持升级到指定协议
                 if (upgradeProtocol != null) {
                     if (upgradeProtocol.accept(request)) {
-                        // Create clone of request for upgraded protocol
                         Request upgradeRequest = null;
                         try {
                             upgradeRequest = cloneRequest(request);
@@ -351,10 +350,10 @@ public class Http11Processor extends AbstractProcessor {
             }
 
             if (getErrorState().isIoAllowed()) {
-                // Setting up filters, and parse some request headers
+                //标记当前请求已经解析完成，准备交予Container处理业务
                 rp.setStage(org.apache.coyote.Constants.STAGE_PREPARE);
                 try {
-                    //对解析完成的请求头数据进行校验和处理
+                    //对请求头进行必要的校验，如：是否开启keep-alive，根据请求头获取host
                     prepareRequest();
                 } catch (Throwable t) {
                     ExceptionUtils.handleThrowable(t);
@@ -367,33 +366,26 @@ public class Http11Processor extends AbstractProcessor {
                 }
             }
 
+            //默认值100
             int maxKeepAliveRequests = protocol.getMaxKeepAliveRequests();
             if (maxKeepAliveRequests == 1) {
                 keepAlive = false;
             } else if (maxKeepAliveRequests > 0 &&
                     socketWrapper.decrementKeepAlive() <= 0) {
+                //当前keepAlive值（默认100次）剩余次数若已经耗尽，关闭keepAlive
                 keepAlive = false;
             }
 
-            // Process the request in the adapter
+
             if (getErrorState().isIoAllowed()) {
                 try {
+                    //标记当前请求为业务处理阶段
                     rp.setStage(org.apache.coyote.Constants.STAGE_SERVICE);
 
-
-
-
-                    //** 调用Adapter继续处理请求：将tomcat内置的request、response包装
-                    //   成HttpServletRequest和HttpServletResponse进行请求处理 **
+                    //** 将coyote包下的Request和Response转换为HttpServletRequest、HttpServletResponse，并转发给Engine处理 **
                     getAdapter().service(request, response);
 
 
-
-                    // Handle when the response was committed before a serious
-                    // error occurred.  Throwing a ServletException should both
-                    // set the status to 500 and set the errorException.
-                    // If we fail here, then the response is likely already
-                    // committed, so we can't try and set headers.
                     if(keepAlive && !getErrorState().isError() && !isAsync() &&
                             statusDropsConnection(response.getStatus())) {
                         setErrorState(ErrorState.CLOSE_CLEAN, null);
@@ -422,7 +414,7 @@ public class Http11Processor extends AbstractProcessor {
                 }
             }
 
-            // Finish the handling of the request
+            //标记当前请求已经处理完毕
             rp.setStage(org.apache.coyote.Constants.STAGE_ENDINPUT);
             if (!isAsync()) {
                 // If this is an async request then the request ends when it has
@@ -430,6 +422,7 @@ public class Http11Processor extends AbstractProcessor {
                 // endRequest() in that case.
                 endRequest();
             }
+            //当前请求已经完成响应
             rp.setStage(org.apache.coyote.Constants.STAGE_ENDOUTPUT);
 
             // If there was an error, make sure the request is counted as
@@ -472,13 +465,20 @@ public class Http11Processor extends AbstractProcessor {
             if (sendfileState == SendfileState.PENDING) {
                 return SocketState.SENDFILE;
             } else {
+                // openSocket - socket仍需要处于打开状态
+                //   1、[请求行]部分未解析完成（数据尚未完整到达）
+                //   2、[请求头]部分未解析完成（数据尚未完整到达）
                 if (openSocket) {
                     if (readComplete) {
+                        //请求行部分还未开始解析（仅仅只是换行符数据，真正的数据还未到），返回OPEN
                         return SocketState.OPEN;
                     } else {
+                        //[请求行]未解析完，等待数据，返回LONG
+                        //[请求头]未解析完，等待数据，返回LONG
                         return SocketState.LONG;
                     }
                 } else {
+                    //当前请求处理完成
                     return SocketState.CLOSED;
                 }
             }
@@ -533,19 +533,18 @@ public class Http11Processor extends AbstractProcessor {
 
 
     private boolean handleIncompleteRequestLineRead() {
-        // Haven't finished reading the request so keep the socket
-        // open
+        //请求行尚未解析完成，继续保持socket连接为打开状态
         openSocket = true;
-        // Check to see if we have read any of the request line yet
+
         if (inputBuffer.getParsingRequestLinePhase() > 1) {
-            // Started to read request line.
+            // 请求行已经解析了部分，但剩余部分还未完整到达
             if (protocol.isPaused()) {
-                // Partially processed the request so need to respond
+                //暂停状态，服务拒绝处理请求
                 response.setStatus(503);
                 setErrorState(ErrorState.CLOSE_CLEAN, null);
                 return false;
             } else {
-                // Need to keep processor associated with socket
+                //请求行尚未解析完，等待socket数据到达
                 readComplete = false;
             }
         }
@@ -592,24 +591,25 @@ public class Http11Processor extends AbstractProcessor {
 
         MessageBytes protocolMB = request.protocol();
         if (protocolMB.equals(Constants.HTTP_11)) {
+            //  HTTP/1.1
             http09 = false;
             http11 = true;
             protocolMB.setString(Constants.HTTP_11);
         } else if (protocolMB.equals(Constants.HTTP_10)) {
+            //  HTTP/1.0
             http09 = false;
             http11 = false;
             keepAlive = false;
             protocolMB.setString(Constants.HTTP_10);
         } else if (protocolMB.equals("")) {
-            // HTTP/0.9
+            //  HTTP/0.9
             http09 = true;
             http11 = false;
             keepAlive = false;
         } else {
-            // Unsupported protocol
+            //非法请求协议
             http09 = false;
             http11 = false;
-            // Send 505; Unsupported HTTP version
             response.setStatus(505);
             setErrorState(ErrorState.CLOSE_CLEAN, null);
             if (log.isDebugEnabled()) {
@@ -625,20 +625,23 @@ public class Http11Processor extends AbstractProcessor {
      */
     private void prepareRequest() throws IOException {
 
+        //启动SSL，设置请求的schema的值为https
         if (protocol.isSSLEnabled()) {
             request.scheme().setString("https");
         }
 
         MimeHeaders headers = request.getMimeHeaders();
 
-        // 确认请求头中的connection的value（一般是keep-alive）
+        //请求头connection=keep-alive？
         MessageBytes connectionValueMB = headers.getValue(Constants.CONNECTION);
         if (connectionValueMB != null && !connectionValueMB.isNull()) {
             Set<String> tokens = new HashSet<>();
             TokenList.parseTokenList(headers.values(Constants.CONNECTION), tokens);
             if (tokens.contains(Constants.CLOSE)) {
+                //connection=close：关闭keep-alive功能
                 keepAlive = false;
             } else if (tokens.contains(Constants.KEEP_ALIVE_HEADER_VALUE_TOKEN)) {
+                //connection=keep-alive：开启keep-alive功能
                 keepAlive = true;
             }
         }
@@ -647,7 +650,7 @@ public class Http11Processor extends AbstractProcessor {
             prepareExpectation(headers);
         }
 
-        // 确认请求头中的user-agent的value
+        //请求头user-agent=xx处理，禁用HTTP/1.1和keepAlive
         Pattern restrictedUserAgents = protocol.getRestrictedUserAgentsPattern();
         if (restrictedUserAgents != null && (http11 || keepAlive)) {
             MessageBytes userAgentValueMB = headers.getValue("user-agent");
@@ -663,7 +666,8 @@ public class Http11Processor extends AbstractProcessor {
         }
 
 
-        // 确认请求头中的host的值（若当前为HTTP/1.1，是不允许没有host的value值）
+        //校验请求头host=xx：
+        // HTTP/1.1必须有host的值
         MessageBytes hostValueMB = null;
         try {
             hostValueMB = headers.getUniqueValue("host");
@@ -680,13 +684,14 @@ public class Http11Processor extends AbstractProcessor {
         // 若不是HTTP/1.1且请求头中没有host的键值对，默认添加上
         ByteChunk uriBC = request.requestURI().getByteChunk();
         byte[] uriB = uriBC.getBytes();
+        //URI以http开头
         if (uriBC.startsWithIgnoreCase("http", 0)) {
             int pos = 4;
-            //开头是http或https
+            //URI以https开头
             if (uriBC.startsWithIgnoreCase("s", pos)) {
                 pos++;
             }
-            // 紧接着的3个字符必须是"://"
+            //URI以http(s)://开头
             if (uriBC.startsWith("://", pos)) {
                 pos += 3;
                 int uriBCStart = uriBC.getStart();

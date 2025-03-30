@@ -16,15 +16,12 @@
  */
 package org.apache.tomcat.websocket.server;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
+import org.apache.tomcat.util.codec.binary.Base64;
+import org.apache.tomcat.util.res.StringManager;
+import org.apache.tomcat.util.security.ConcurrentMessageDigest;
+import org.apache.tomcat.websocket.Constants;
+import org.apache.tomcat.websocket.*;
+import org.apache.tomcat.websocket.pojo.PojoMethodMapping;
 
 import javax.servlet.ServletException;
 import javax.servlet.ServletRequest;
@@ -36,16 +33,10 @@ import javax.websocket.Endpoint;
 import javax.websocket.Extension;
 import javax.websocket.HandshakeResponse;
 import javax.websocket.server.ServerEndpointConfig;
-
-import org.apache.tomcat.util.codec.binary.Base64;
-import org.apache.tomcat.util.res.StringManager;
-import org.apache.tomcat.util.security.ConcurrentMessageDigest;
-import org.apache.tomcat.websocket.Constants;
-import org.apache.tomcat.websocket.Transformation;
-import org.apache.tomcat.websocket.TransformationFactory;
-import org.apache.tomcat.websocket.Util;
-import org.apache.tomcat.websocket.WsHandshakeResponse;
-import org.apache.tomcat.websocket.pojo.PojoMethodMapping;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.Map.Entry;
 
 public class UpgradeUtil {
 
@@ -84,6 +75,14 @@ public class UpgradeUtil {
     }
 
 
+    /**
+     * 将http/http协议连接升级为websocket...
+     * @param sc ws服务端容器，可能包含许多ws服务端点实例...
+     * @param req 当前http/https请求体
+     * @param resp 当前http/https响应体
+     * @param sec 当前ws服务端的配置（含ServerEndpoint），当前请求升级后由此ws服务端配置进行处理
+     * @param pathParams 路径参数
+     */
     public static void doUpgrade(WsServerContainer sc, HttpServletRequest req,
             HttpServletResponse resp, ServerEndpointConfig sec,
             Map<String,String> pathParams)
@@ -91,6 +90,11 @@ public class UpgradeUtil {
 
         // Validate the rest of the headers and reject the request if that
         // validation fails
+
+        //校验请求头合法性，非法的将拒绝升级：
+        // 1、若请求头中不含Connection=upgrade（表示当前请求连接需要升级协议）
+        // 2、若请求头中不含Sec-WebSocket-Version=13（指明与客户端通信的websocket协议版本必须为13）
+        // 3、若请求头中不含Sec-WebSocket-Key的值（作为客户端唯一标识，服务端将用此标识生成服务端的唯一标识）
         String key;
         String subProtocol = null;
         if (!headerContainsToken(req, Constants.CONNECTION_HEADER_NAME,
@@ -112,12 +116,13 @@ public class UpgradeUtil {
         }
 
 
-        // Origin check
+        // 请求头中Origin值的检查，不满足将不进行ws升级...
         String origin = req.getHeader(Constants.ORIGIN_HEADER_NAME);
         if (!sec.getConfigurator().checkOrigin(origin)) {
             resp.sendError(HttpServletResponse.SC_FORBIDDEN);
             return;
         }
+
         // Sub-protocols
         List<String> subProtocols = getTokensFromHeader(req,
                 Constants.WS_PROTOCOL_HEADER_NAME);
@@ -185,7 +190,7 @@ public class UpgradeUtil {
             throw new ServletException(sm.getString("upgradeUtil.incompatibleRsv"));
         }
 
-        // If we got this far, all is good. Accept the connection.
+        // 到此为止已经符合升级条件，设置升级ws成功的响应头：Upgrade=websocket    Connection=upgrade Sec-WebSocket-Accept=
         resp.setHeader(Constants.UPGRADE_HEADER_NAME,
                 Constants.UPGRADE_HEADER_VALUE);
         resp.setHeader(Constants.CONNECTION_HEADER_NAME,
@@ -200,11 +205,11 @@ public class UpgradeUtil {
             resp.setHeader(Constants.WS_EXTENSIONS_HEADER_NAME, responseHeaderExtensions.toString());
         }
 
-        // Add method mapping to user properties
         if (!Endpoint.class.isAssignableFrom(sec.getEndpointClass()) &&
                 sec.getUserProperties().get(org.apache.tomcat.websocket.pojo.Constants.POJO_METHOD_MAPPING_KEY) == null) {
-            // This is a POJO endpoint and the application has called upgrade
-            // directly. Need to add the method mapping.
+            // 若当前的ws服务端点实现不是继承Endpoint类，且当前ServerEndpointConfig.userProperties中不含
+            // PojoMethodMapping（专用于对非Endpoint的普通类进行包装适配，使其能够达到Endpoint的对等功能）
+            //为其创建PojoMethodMapping并添加到ServerEndpointConfig.userProperties中
             try {
                 PojoMethodMapping methodMapping = new PojoMethodMapping(sec.getEndpointClass(),
                         sec.getDecoders(), sec.getPath(), sc.getInstanceManager(Thread.currentThread().getContextClassLoader()));
@@ -235,6 +240,7 @@ public class UpgradeUtil {
             }
         }
 
+        //创建WsHttpUpgradeHandler
         WsHttpUpgradeHandler wsHandler =
                 req.upgrade(WsHttpUpgradeHandler.class);
         wsHandler.preInit(perSessionServerEndpointConfig, sc, wsRequest,

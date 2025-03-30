@@ -16,14 +16,11 @@
  */
 package org.apache.tomcat.websocket.server;
 
-import java.io.IOException;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.EnumSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
+import org.apache.tomcat.InstanceManager;
+import org.apache.tomcat.util.res.StringManager;
+import org.apache.tomcat.websocket.WsSession;
+import org.apache.tomcat.websocket.WsWebSocketContainer;
+import org.apache.tomcat.websocket.pojo.PojoMethodMapping;
 
 import javax.naming.NamingException;
 import javax.servlet.DispatcherType;
@@ -40,22 +37,19 @@ import javax.websocket.server.ServerContainer;
 import javax.websocket.server.ServerEndpoint;
 import javax.websocket.server.ServerEndpointConfig;
 import javax.websocket.server.ServerEndpointConfig.Configurator;
-
-import org.apache.tomcat.InstanceManager;
-import org.apache.tomcat.util.res.StringManager;
-import org.apache.tomcat.websocket.WsSession;
-import org.apache.tomcat.websocket.WsWebSocketContainer;
-import org.apache.tomcat.websocket.pojo.PojoMethodMapping;
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
- * Provides a per class loader (i.e. per web application) instance of a
- * ServerContainer. Web application wide defaults may be configured by setting
- * the following servlet context initialisation parameters to the desired
- * values.
- * <ul>
- * <li>{@link Constants#BINARY_BUFFER_SIZE_SERVLET_CONTEXT_INIT_PARAM}</li>
- * <li>{@link Constants#TEXT_BUFFER_SIZE_SERVLET_CONTEXT_INIT_PARAM}</li>
- * </ul>
+ *
+ * <pre>
+ * 为每一个Context（web application）提供一个ServerContainer实例（websocket服务端容器）
+ * 通过向ServletContext中添加指定参数来配置WsServerContainer：
+ *     1、org.apache.tomcat.websocket.binaryBufferSize：设置默认最大字节消息缓存大小
+ *     2、org.apache.tomcat.websocket.textBufferSize：设置默认最大字符消息缓存大小
+ * </pre>
  */
 public class WsServerContainer extends WsWebSocketContainer
         implements ServerContainer {
@@ -69,10 +63,17 @@ public class WsServerContainer extends WsWebSocketContainer
 
     private final WsWriteTimeout wsWriteTimeout = new WsWriteTimeout();
 
+    //当前WsServerContainer所在的web app中的ServletContext
     private final ServletContext servletContext;
+
+    //根据路径精确匹配
     private final Map<String,ExactPathMatch> configExactMatchMap = new ConcurrentHashMap<>();
+
+    //根据路径模糊匹配[含路径参数]
     private final Map<Integer,ConcurrentSkipListMap<String,TemplatePathMatch>> configTemplateMatchMap =
             new ConcurrentHashMap<>();
+
+
     @SuppressWarnings("deprecation")
     private volatile boolean enforceNoAddAfterHandshake =
             org.apache.tomcat.websocket.Constants.STRICT_SPEC_COMPLIANCE;
@@ -87,25 +88,30 @@ public class WsServerContainer extends WsWebSocketContainer
         this.servletContext = servletContext;
         setInstanceManager((InstanceManager) servletContext.getAttribute(InstanceManager.class.getName()));
 
-        // Configure servlet context wide defaults
+        //尝试设置通讯时最大的字节缓存块大小
         String value = servletContext.getInitParameter(
                 Constants.BINARY_BUFFER_SIZE_SERVLET_CONTEXT_INIT_PARAM);
         if (value != null) {
             setDefaultMaxBinaryMessageBufferSize(Integer.parseInt(value));
         }
 
+        //尝试设置通讯时最大的字符缓存块大小
         value = servletContext.getInitParameter(
                 Constants.TEXT_BUFFER_SIZE_SERVLET_CONTEXT_INIT_PARAM);
         if (value != null) {
             setDefaultMaxTextMessageBufferSize(Integer.parseInt(value));
         }
 
+        //忽略，已废弃!!!
         value = servletContext.getInitParameter(
                 Constants.ENFORCE_NO_ADD_AFTER_HANDSHAKE_CONTEXT_INIT_PARAM);
         if (value != null) {
             setEnforceNoAddAfterHandshake(Boolean.parseBoolean(value));
         }
 
+        //向servletContext中注册一个过滤器：拦截处理http升级为websocket的逻辑处理...
+        // 拦截资源路径："/*"
+        // 拦截所有带"/*"的请求和转发....
         FilterRegistration.Dynamic fr = servletContext.addFilter(
                 "Tomcat WebSocket (JSR356) Filter", new WsFilter());
         fr.setAsyncSupported(true);
@@ -118,13 +124,14 @@ public class WsServerContainer extends WsWebSocketContainer
 
 
     /**
-     * Published the provided endpoint implementation at the specified path with
-     * the specified configuration. {@link #WsServerContainer(ServletContext)}
-     * must be called before calling this method.
      *
-     * @param sec   The configuration to use when creating endpoint instances
-     * @throws DeploymentException if the endpoint cannot be published as
-     *         requested
+     * <pre>
+     * 注册websocket服务端点配置，此配置包含：
+     *   1、实现了Endpoint抽象类的子类
+     *   2、服务端点对应的路径（path）
+     *   3、编码、解码器
+     *   ......
+     * </pre>
      */
     @Override
     public void addEndpoint(ServerEndpointConfig sec) throws DeploymentException {
@@ -152,7 +159,8 @@ public class WsServerContainer extends WsWebSocketContainer
         try {
             String path = sec.getPath();
 
-            // Add method mapping to user properties
+            // 含@OnOpen、@OnClose、@OnError、@OnMessage注解的websocket服务端类才能作为属性添加到
+            // ServerEndpointConfig.userProperties中
             PojoMethodMapping methodMapping = new PojoMethodMapping(sec.getEndpointClass(),
                     sec.getDecoders(), path, getInstanceManager(Thread.currentThread().getContextClassLoader()));
             if (methodMapping.getOnClose() != null || methodMapping.getOnOpen() != null
@@ -369,19 +377,19 @@ public class WsServerContainer extends WsWebSocketContainer
 
     public WsMappingResult findMapping(String path) {
 
-        // Prevent registering additional endpoints once the first attempt has
-        // been made to use one
+        //一旦开始使用注册的服务端点，就不允许再向WsServerContainer中注册新服务端点的
         if (addAllowed) {
             addAllowed = false;
         }
 
-        // Check an exact match. Simple case as there are no templates.
+        // 首先尝试根据路径精确匹配...
         ExactPathMatch match = configExactMatchMap.get(path);
         if (match != null) {
+            //精确匹配成功，返回WsMappingResult（含ServerEndpointConfig，不含路径参数...）
             return new WsMappingResult(match.getConfig(), Collections.<String, String>emptyMap());
         }
 
-        // No exact match. Need to look for template matches.
+        // 精确匹配失败，尝试路径模板匹配....
         UriTemplate pathUriTemplate = null;
         try {
             pathUriTemplate = new UriTemplate(path);
@@ -395,8 +403,7 @@ public class WsServerContainer extends WsWebSocketContainer
         ConcurrentSkipListMap<String,TemplatePathMatch> templateMatches = configTemplateMatchMap.get(key);
 
         if (templateMatches == null) {
-            // No templates with an equal number of segments so there will be
-            // no matches
+            //没有匹配成功
             return null;
         }
 
@@ -407,6 +414,7 @@ public class WsServerContainer extends WsWebSocketContainer
         for (TemplatePathMatch templateMatch : templateMatches.values()) {
             pathParams = templateMatch.getUriTemplate().match(pathUriTemplate);
             if (pathParams != null) {
+                //匹配成功
                 sec = templateMatch.getConfig();
                 break;
             }
@@ -417,6 +425,7 @@ public class WsServerContainer extends WsWebSocketContainer
             return null;
         }
 
+        //模板方式匹配成功，返回WsMappingResult（含ServerEndpointConfig，含路径参数）
         return new WsMappingResult(sec, pathParams);
     }
 

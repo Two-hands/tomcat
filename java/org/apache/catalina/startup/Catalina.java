@@ -17,21 +17,6 @@
 package org.apache.catalina.startup;
 
 
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.lang.reflect.Constructor;
-import java.net.ConnectException;
-import java.net.Socket;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
-import java.util.logging.LogManager;
-
 import org.apache.catalina.Container;
 import org.apache.catalina.LifecycleException;
 import org.apache.catalina.LifecycleState;
@@ -52,6 +37,17 @@ import org.apache.tomcat.util.log.SystemLogHandler;
 import org.apache.tomcat.util.res.StringManager;
 import org.xml.sax.Attributes;
 import org.xml.sax.InputSource;
+
+import java.io.*;
+import java.lang.reflect.Constructor;
+import java.net.ConnectException;
+import java.net.Socket;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.LogManager;
 
 
 /**
@@ -705,18 +701,20 @@ public class Catalina {
         // Before digester - it may be needed
         initNaming();
 
-        // Parse main server.xml
+        //解析catalinaBase目录下的conf/server.xml配置文件
+        // 解析过程会创建StandardServer、StandardService、Connector、StandardEngine、StandardHost
         parseServerXml(true);
         Server s = getServer();
         if (s == null) {
             return;
         }
 
+        //初始化server的catalinaHome和catalinaBase
         getServer().setCatalina(this);
         getServer().setCatalinaHome(Bootstrap.getCatalinaHomeFile());
         getServer().setCatalinaBase(Bootstrap.getCatalinaBaseFile());
 
-        // Stream redirection
+        // 重置应用的标准错误输出和标准输出流
         initStreams();
 
         // Start the new server
@@ -757,6 +755,7 @@ public class Catalina {
     public void start() {
 
         if (getServer() == null) {
+            //实例化相关容器并执行init方法
             load();
         }
 

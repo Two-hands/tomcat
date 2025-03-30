@@ -25,9 +25,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 
 /**
- * Common interface for processors of all protocols.
- *
- * 处理器：处理具体协议
+ * 协议处理器：定义所有协议都必须按照此接口定义进行客户端连接的数据处理
  */
 public interface Processor {
 

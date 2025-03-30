@@ -64,11 +64,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
     private int nameIndex = 0;
 
 
-    /**
-     * Endpoint that provides low-level network I/O - must be matched to the
-     * ProtocolHandler implementation (ProtocolHandler using NIO, requires NIO
-     * Endpoint etc.).
-     */
+    //连接端点：提供更低层次的网络I/O，必须与具体的ProtocolHandler实现项匹配
     private final AbstractEndpoint<S,?> endpoint;
 
 
@@ -786,10 +782,10 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
 
             S socket = wrapper.getSocket();
 
-            // We take complete ownership of the Processor inside of this method to ensure
-            // no other thread can release it while we're using it. Whatever processor is
-            // held by this variable will be associated with the SocketWrapper before this
-            // method returns.
+
+            //尝试获取与wrapper关联的processor：
+            // 1、当前socket的请求数据不完整，需要等待数据到来后处理
+            // 2、当前socket的请求升级为websocket
             Processor processor = (Processor) wrapper.takeCurrentProcessor();
             if (getLog().isDebugEnabled()) {
                 getLog().debug(sm.getString("abstractConnectionHandler.connectionsGet",
@@ -809,7 +805,8 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
             }
 
             if (processor != null) {
-                // Make sure an async timeout doesn't fire
+                //websocket关联的processor从waitingProcessors中移除
+                //等待后续请求数据处理完成后可能会继续将其放入waitingProcessors中，如此循环
                 getProtocol().removeWaitingProcessor(processor);
             } else if (status == SocketEvent.DISCONNECT || status == SocketEvent.ERROR) {
                 // Nothing to do. Endpoint requested a close and there is no
@@ -875,11 +872,13 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                 processor.setSslSupport(
                         wrapper.getSslSupport(getProtocol().getClientCertProvider()));
 
-                SocketState state = SocketState.CLOSED;
+                SocketState state;
                 do {
-                    //通过具体协议处理类解析Socket请求，获取Request
+                    //1、处理当前HTTP请求
+                    //2、当前请求升级为websocket协议成功，立即调用dispatch方法处理ws请求
                     state = processor.process(wrapper, status);
 
+                    //协议升级....
                     if (state == SocketState.UPGRADING) {
                         // Get the HTTP upgrade handler
                         UpgradeToken upgradeToken = processor.getUpgradeToken();
@@ -906,20 +905,20 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                             }
                         } else {
                             HttpUpgradeHandler httpUpgradeHandler = upgradeToken.getHttpUpgradeHandler();
-                            // Release the Http11 processor to be re-used
+                            //回收释放当前Http11的处理器
                             release(processor);
-                            // Create the upgrade processor
+
+                            //创建处理升级协议的处理器（如websocket、HTTP2），开始处理升级协议连接...
                             processor = getProtocol().createUpgradeProcessor(wrapper, upgradeToken);
                             if (getLog().isDebugEnabled()) {
                                 getLog().debug(sm.getString("abstractConnectionHandler.upgradeCreate",
                                         processor, wrapper));
                             }
-                            // Initialise the upgrade handler (which may trigger
-                            // some IO using the new protocol which is why the lines
-                            // above are necessary)
-                            // This cast should be safe. If it fails the error
-                            // handling for the surrounding try/catch will deal with
-                            // it.
+
+                            //调用HttpUpgradeHandler#init方法：初始化新建的升级处理器（processor）：
+                            // websocket：1、完成连接初始化（新建WsRemoteEndpointImplServer、WsSession、WsFrameServer实例）
+                            //            2、调用ServerEndpoint#onOpen，将WsSession放入WsServerContainer中
+                            // http2：???
                             if (upgradeToken.getInstanceManager() == null) {
                                 httpUpgradeHandler.init((WebConnection) processor);
                             } else {
@@ -930,6 +929,8 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                                     upgradeToken.getContextBind().unbind(false, oldCL);
                                 }
                             }
+
+
                             if (httpUpgradeHandler instanceof InternalHttpUpgradeHandler) {
                                 if (((InternalHttpUpgradeHandler) httpUpgradeHandler).hasAsyncIO()) {
                                     // The handler will initiate all further I/O
@@ -940,17 +941,19 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                     }
                 } while ( state == SocketState.UPGRADING);
 
+                //处理结果状态处理：
                 if (state == SocketState.LONG) {
-                    // In the middle of processing a request/response. Keep the
-                    // socket associated with the processor. Exact requirements
-                    // depend on type of long poll
+                    //当前请求的数据还未完全到达...
+                    //   继续保持wrapper（含socketChannel）与processor关联
+                    //   需要继续注册读事件到Selector中，以便等待剩余请求数据的到来
                     longPoll(wrapper, processor);
                     if (processor.isAsync()) {
                         getProtocol().addWaitingProcessor(processor);
                     }
                 } else if (state == SocketState.OPEN) {
-                    // In keep-alive but between requests. OK to recycle
-                    // processor. Continue to poll for the next request.
+                    // 处理keep-alive状态，同一个socket链接的请求之间的连续处理需（需要等待下一个请求的请求行数据到来）：
+                    // 释放与socketWrapper关联的processor
+                    // 重新注册socketChannel的读事件，等待请求数据的到来
                     release(processor);
                     processor = null;
                     wrapper.registerReadInterest();
@@ -960,12 +963,12 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                     // poller (or equivalent) to await more data or processed
                     // if there are any pipe-lined requests remaining.
                 } else if (state == SocketState.UPGRADED) {
-                    // Don't add sockets back to the poller if this was a
-                    // non-blocking write otherwise the poller may trigger
-                    // multiple read events which may lead to thread starvation
-                    // in the connector. The write() method will add this socket
-                    // to the poller if necessary.
+                    // 如果这是非阻塞写入，请不要将套接字添加回轮询器，
+                    // 否则轮询器可能会触发多个读取事件，从而导致线程饥饿
+
                     if (status != SocketEvent.OPEN_WRITE) {
+                        // 协议升级完成，注册socketChannel的读事件到Selector中，
+                        // 并将当前与socketChannel关联的processor添加到waitingProcessors集合中
                         longPoll(wrapper, processor);
                         getProtocol().addWaitingProcessor(processor);
                     }
@@ -977,10 +980,9 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                     // The resumeProcessing() method will add this socket
                     // to the poller.
                 } else {
-                    // Connection closed. OK to recycle the processor.
-                    // Processors handling upgrades require additional clean-up
-                    // before release.
+                    //当前请求socket连接需要关闭
                     if (processor != null && processor.isUpgrade()) {
+                        //如果是升级后的处理器，销毁其httpUpgradeHandler
                         UpgradeToken upgradeToken = processor.getUpgradeToken();
                         HttpUpgradeHandler httpUpgradeHandler = upgradeToken.getHttpUpgradeHandler();
                         InstanceManager instanceManager = upgradeToken.getInstanceManager();
@@ -1002,11 +1004,17 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                         }
                     }
 
+                    //释放processor
+                    //若是升级的processor，将其从waitingProcessors移除
                     release(processor);
                     processor = null;
                 }
 
+
                 if (processor != null) {
+                    //将当前socketChannel与processor关联起来：
+                    // 1、HTTP请求数据未完全到达，需要继续等待
+                    // 2、当前websocket请求处于连接中，保持会话正常通信
                     wrapper.setCurrentProcessor(processor);
                 }
                 return state;
@@ -1055,6 +1063,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                 //  - this is an upgraded connection
                 //  - the request line/headers have not been completely
                 //    read
+                //当前HTTP请求的请求行、请求头数据尚未读取完毕
                 socket.registerReadInterest();
             }
         }
@@ -1087,20 +1096,10 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
             if (processor != null) {
                 processor.recycle();
                 if (processor.isUpgrade()) {
-                    // While UpgradeProcessor instances should not normally be
-                    // present in waitingProcessors there are various scenarios
-                    // where this can happen. E.g.:
-                    // - when AsyncIO is used
-                    // - WebSocket I/O error on non-container thread
-                    // Err on the side of caution and always try and remove any
-                    // UpgradeProcessor instances from waitingProcessors
+                    //升级过的processor，将其从waitingProcessors中移除
                     getProtocol().removeWaitingProcessor(processor);
                 } else {
-                    // After recycling, only instances of UpgradeProcessorBase
-                    // will return true for isUpgrade().
-                    // Instances of UpgradeProcessorBase should not be added to
-                    // recycledProcessors since that pool is only for AJP or
-                    // HTTP processors
+                    //普通的processor，回收
                     recycledProcessors.push(processor);
                     if (getLog().isDebugEnabled()) {
                         getLog().debug("Pushed Processor [" + processor + "]");

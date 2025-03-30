@@ -16,36 +16,31 @@
  */
 package javax.websocket.server;
 
+import javax.websocket.Endpoint;
 import java.util.Set;
 
-import javax.websocket.Endpoint;
-
 /**
- * Applications may provide an implementation of this interface to filter the
- * discovered WebSocket endpoints that are deployed. Implementations of this
- * class will be discovered via an ServletContainerInitializer scan.
+ * 用来过滤已发现的websocket服务端的实现类，并尝试将其解析并封装为ServerEndpointConfig返回
+ * 此类的实现将通过ServletContainerInitializer扫描发现
  */
 public interface ServerApplicationConfig {
 
     /**
-     * Enables applications to filter the discovered implementations of
-     * {@link ServerEndpointConfig}.
-     *
-     * @param scanned   The {@link Endpoint} implementations found in the
-     *                  application
-     * @return  The set of configurations for the endpoint the application
-     *              wishes to deploy
+     * 对Endpoint抽象类的实现类（websocket服务端实现）进行过滤，只返回满足条件的结果
+     * 对需要返回的Endpoint子类构建其ServerEndpointConfig
+     * @param scanned 已发现的实现Endpoint抽象类的子类...
      */
     Set<ServerEndpointConfig> getEndpointConfigs(
             Set<Class<? extends Endpoint>> scanned);
 
+
     /**
-     * Enables applications to filter the discovered classes annotated with
-     * {@link ServerEndpoint}.
-     *
-     * @param scanned   The POJOs annotated with {@link ServerEndpoint} found in
-     *                  the application
-     * @return  The set of POJOs the application wishes to deploy
+     * <pre>
+     * 对含有@ServerEndpoint注解的类进行过滤，值返回满足条件的结果
+     *    ** 对于使用@ServerEndpoint注解来标注websocket服务端的类来讲，
+     *       它的ServerEndpointConfig是DefaultServerEndpointConfig
+     * </pre>
+     * @param scanned 已发现的含有@ServerEndpoint注解的类
      */
     Set<Class<?>> getAnnotatedEndpointClasses(Set<Class<?>> scanned);
 }

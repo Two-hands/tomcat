@@ -16,24 +16,15 @@
  */
 package org.apache.catalina.core;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.lang.annotation.Annotation;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
-import java.security.PrivilegedActionException;
-import java.security.PrivilegedExceptionAction;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Set;
+import org.apache.catalina.ContainerServlet;
+import org.apache.catalina.Globals;
+import org.apache.catalina.security.SecurityUtil;
+import org.apache.catalina.util.Introspection;
+import org.apache.juli.logging.Log;
+import org.apache.tomcat.InstanceManager;
+import org.apache.tomcat.util.ExceptionUtils;
+import org.apache.tomcat.util.collections.ManagedConcurrentWeakHashMap;
+import org.apache.tomcat.util.res.StringManager;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -44,16 +35,17 @@ import javax.naming.NamingException;
 import javax.persistence.PersistenceContext;
 import javax.persistence.PersistenceUnit;
 import javax.xml.ws.WebServiceRef;
-
-import org.apache.catalina.ContainerServlet;
-import org.apache.catalina.Globals;
-import org.apache.catalina.security.SecurityUtil;
-import org.apache.catalina.util.Introspection;
-import org.apache.juli.logging.Log;
-import org.apache.tomcat.InstanceManager;
-import org.apache.tomcat.util.ExceptionUtils;
-import org.apache.tomcat.util.collections.ManagedConcurrentWeakHashMap;
-import org.apache.tomcat.util.res.StringManager;
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
+import java.security.PrivilegedActionException;
+import java.security.PrivilegedExceptionAction;
+import java.util.*;
 
 public class DefaultInstanceManager implements InstanceManager {
 

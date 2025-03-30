@@ -20,87 +20,84 @@ import java.io.IOException;
 import java.net.URI;
 import java.util.Set;
 
+/**
+ * websocket的容器
+ */
 public interface WebSocketContainer {
 
     /**
-     * Get the default timeout for sending a message asynchronously.
-     * @return The current default timeout in milliseconds. A non-positive value
-     *         means an infinite timeout.
+     * 默认异步发送消息的超时时间
+     * @return 超时时间（毫秒），若是负数，表示永不超时
      */
     long getDefaultAsyncSendTimeout();
 
+
     /**
-     * Set the default timeout for sending a message asynchronously.
-     * @param timeout The new default timeout in milliseconds. A non-positive
-     *                value means an infinite timeout.
+     * 设置异步发送超时时间
+     * @param timeout 超时时间（毫秒），若是负数，表示永不超时
      */
     void setAsyncSendTimeout(long timeout);
 
+    /**
+     * 客户端连接服务端，新建一个websocket连接，并生成端与端之前的会话（Session）记录通讯状态
+     * @param endpoint 服务端点
+     * @param path 访问路径
+     * @return 会话
+     */
     Session connectToServer(Object endpoint, URI path)
             throws DeploymentException, IOException;
 
+
+    /**
+     * 客户端连接服务端，新建一个websocket连接，并生成端与端之前的会话（Session）记录通讯状态
+     * @param annotatedEndpointClass 服务端点（含@ServerEndpoint注解的类）
+     * @param path 访问路径
+     * @return 会话
+     */
     Session connectToServer(Class<?> annotatedEndpointClass, URI path)
             throws DeploymentException, IOException;
 
+
     /**
-     * Creates a new connection to the WebSocket.
-     *
-     * @param endpoint
-     *            The endpoint instance that will handle responses from the
-     *            server
-     * @param clientEndpointConfiguration
-     *            Used to configure the new connection
-     * @param path
-     *            The full URL of the WebSocket endpoint to connect to
-     *
-     * @return The WebSocket session for the connection
-     *
-     * @throws DeploymentException  If the connection cannot be established
-     * @throws IOException If an I/O occurred while trying to establish the
-     *                     connection
+     * 客户端连接服务端，新建一个websocket连接，并生成端与端之前的会话（Session）记录通讯状态
+     * @param endpoint 服务端点
+     * @param clientEndpointConfiguration 连接的配置
+     * @param path 访问路径
+     * @return
      */
     Session connectToServer(Endpoint endpoint,
             ClientEndpointConfig clientEndpointConfiguration, URI path)
             throws DeploymentException, IOException;
 
+
     /**
-     * Creates a new connection to the WebSocket.
-     *
-     * @param endpoint
-     *            An instance of this class will be created to handle responses
-     *            from the server
-     * @param clientEndpointConfiguration
-     *            Used to configure the new connection
-     * @param path
-     *            The full URL of the WebSocket endpoint to connect to
-     *
-     * @return The WebSocket session for the connection
-     *
-     * @throws DeploymentException  If the connection cannot be established
-     * @throws IOException If an I/O occurred while trying to establish the
-     *                     connection
+     *  客户端连接服务端，新建一个websocket连接，并生成端与端之前的会话（Session）记录通讯状态
+     * @param endpoint 服务端点
+     * @param clientEndpointConfiguration 连接的配置
+     * @param path 访问路径
+     * @return
      */
     Session connectToServer(Class<? extends Endpoint> endpoint,
             ClientEndpointConfig clientEndpointConfiguration, URI path)
             throws DeploymentException, IOException;
 
+
     /**
-     * Get the current default session idle timeout.
-     * @return The current default session idle timeout in milliseconds. Zero or
-     *         negative values indicate an infinite timeout.
+     * 获取默认的Session最大空闲超时时间
+     * @return 超时时间（毫秒），若是负数或0，表示永不超时
      */
     long getDefaultMaxSessionIdleTimeout();
 
+
     /**
-     * Set the default session idle timeout.
-     * @param timeout The new default session idle timeout in milliseconds. Zero
-     *                or negative values indicate an infinite timeout.
+     * 设置Session默认的最大空闲超时时间
+     * @param timeout 超时时间（毫秒），若是负数或0，表示永不超时
      */
     void setDefaultMaxSessionIdleTimeout(long timeout);
 
+
     /**
-     * Get the default maximum buffer size for binary messages.
-     * @return The current default maximum buffer size in bytes
+     * 获取默认的消息的最大字节缓存大小
      */
     int getDefaultMaxBinaryMessageBufferSize();
 
@@ -108,17 +105,24 @@ public interface WebSocketContainer {
      * Set the default maximum buffer size for binary messages.
      * @param max The new default maximum buffer size in bytes
      */
+
+    /**
+     * 设置默认的消息的最大字节缓存大小
+     */
     void setDefaultMaxBinaryMessageBufferSize(int max);
 
     /**
      * Get the default maximum buffer size for text messages.
      * @return The current default maximum buffer size in characters
      */
+
+    /**
+     * 获取默认最大文本消息缓存大小
+     */
     int getDefaultMaxTextMessageBufferSize();
 
     /**
-     * Set the default maximum buffer size for text messages.
-     * @param max The new default maximum buffer size in characters
+     * 设置默认最大文本消息缓存大小
      */
     void setDefaultMaxTextMessageBufferSize(int max);
 

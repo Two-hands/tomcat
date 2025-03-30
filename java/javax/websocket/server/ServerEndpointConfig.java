@@ -16,6 +16,7 @@
  */
 package javax.websocket.server;
 
+import javax.websocket.*;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.Collections;
@@ -23,25 +24,20 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.ServiceLoader;
 
-import javax.websocket.Decoder;
-import javax.websocket.Encoder;
-import javax.websocket.EndpointConfig;
-import javax.websocket.Extension;
-import javax.websocket.HandshakeResponse;
 
 /**
- * Provides configuration information for WebSocket endpoints published to a
- * server. Applications may provide their own implementation or use
- * {@link Builder}.
+ * websocket服务端使用的配置
+ * 可以自定义实现这个接口，也可以使用Builder构建出系统提供的默认实现（DefaultServerEndpointConfig）
  */
 public interface ServerEndpointConfig extends EndpointConfig {
 
+    /**
+     * 获取websocket服务端具体实现逻辑的类
+     */
     Class<?> getEndpointClass();
 
     /**
-     * Returns the path at which this WebSocket server endpoint has been
-     * registered. It may be a path or a level 0 URI template.
-     * @return The registered path
+     * 返回此WebSocket服务器端点注册的路径
      */
     String getPath();
 
@@ -52,7 +48,11 @@ public interface ServerEndpointConfig extends EndpointConfig {
     Configurator getConfigurator();
 
 
-    public final class Builder {
+    /**
+     * 快速构建ServerEndpointConfig（默认实现类：DefaultServerEndpointConfig）
+     *  默认实现类的endpointClass、path不能为null，其他字段可选
+     */
+    final class Builder {
 
         public static Builder create(
                 Class<?> endpointClass, String path) {
@@ -60,14 +60,27 @@ public interface ServerEndpointConfig extends EndpointConfig {
         }
 
 
+        //不能为null
         private final Class<?> endpointClass;
+
+        //不能为null，且必须以'/'开头
         private final String path;
+
+        //可选
         private List<Class<? extends Encoder>> encoders =
                 Collections.emptyList();
+
+        //可选
         private List<Class<? extends Decoder>> decoders =
                 Collections.emptyList();
+
+        //可选
         private List<String> subprotocols = Collections.emptyList();
+
+        //可选
         private List<Extension> extensions = Collections.emptyList();
+
+        //可选
         private Configurator configurator =
                 Configurator.fetchContainerDefaultConfigurator();
 
@@ -92,7 +105,7 @@ public interface ServerEndpointConfig extends EndpointConfig {
 
         public ServerEndpointConfig build() {
             return new DefaultServerEndpointConfig(endpointClass, path,
-                    subprotocols, extensions, encoders, decoders, configurator);
+                subprotocols, extensions, encoders, decoders, configurator);
         }
 
 
@@ -151,8 +164,16 @@ public interface ServerEndpointConfig extends EndpointConfig {
     }
 
 
-    public class Configurator {
+    /**
+     * websocket服务端连接客户端的协议相关功能的拓展：
+     *    具体的Configurator要么从/META-INF/services/Configurator文件中获取，
+     *    要么使用默认实现（DefaultServerEndpointConfigurator）
+     */
+    class Configurator {
 
+        /**
+         * 具体的Configurator实例，单例模式
+         */
         private static volatile Configurator defaultImpl = null;
         private static final Object defaultImplLock = new Object();
 
@@ -179,6 +200,7 @@ public interface ServerEndpointConfig extends EndpointConfig {
         private static Configurator loadDefault() {
             Configurator result = null;
 
+            //从META-INF/services中加载Configurator实现类
             ServiceLoader<Configurator> serviceLoader =
                     ServiceLoader.load(Configurator.class);
 
@@ -187,7 +209,7 @@ public interface ServerEndpointConfig extends EndpointConfig {
                 result = iter.next();
             }
 
-            // Fall-back. Also used by unit tests
+            // 如果没有找到，使用默认实现（DefaultServerEndpointConfigurator）
             if (result == null) {
                 try {
                     @SuppressWarnings("unchecked")
@@ -223,15 +245,24 @@ public interface ServerEndpointConfig extends EndpointConfig {
             return fetchContainerDefaultConfigurator().getNegotiatedExtensions(installed, requested);
         }
 
+        /**
+         * websocket建立前确认http升级请求中的origin请求头值
+         */
         public boolean checkOrigin(String originHeaderValue) {
             return fetchContainerDefaultConfigurator().checkOrigin(originHeaderValue);
         }
 
+        /**
+         * websocket握手处理...
+         */
         public void modifyHandshake(ServerEndpointConfig sec,
                 HandshakeRequest request, HandshakeResponse response) {
             fetchContainerDefaultConfigurator().modifyHandshake(sec, request, response);
         }
 
+        /**
+         * 根据websocket服务端类创建实例
+         */
         public <T extends Object> T getEndpointInstance(Class<T> clazz)
                 throws InstantiationException {
             return fetchContainerDefaultConfigurator().getEndpointInstance(

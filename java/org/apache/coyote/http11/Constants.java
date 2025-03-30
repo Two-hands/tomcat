@@ -35,25 +35,25 @@ public final class Constants {
 
 
     /**
-     * CR.
+     * CR. - 13
      */
     public static final byte CR = (byte) '\r';
 
 
     /**
-     * LF.
+     * LF. - 10
      */
     public static final byte LF = (byte) '\n';
 
 
     /**
-     * SP.
+     * SP. - 32
      */
     public static final byte SP = (byte) ' ';
 
 
     /**
-     * HT.
+     * HT. - 9
      */
     public static final byte HT = (byte) '\t';
 

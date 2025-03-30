@@ -17,6 +17,7 @@
 package org.apache.tomcat.util.net;
 
 import org.apache.juli.logging.Log;
+import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.IntrospectionUtils;
 import org.apache.tomcat.util.collections.SynchronizedStack;
@@ -149,6 +150,8 @@ public abstract class AbstractEndpoint<S,U> {
         return (timeout > 0) ? timeout : Long.MAX_VALUE;
     }
 
+    private static final Log log = LogFactory.getLog(AbstractEndpoint.class);
+
     // ----------------------------------------------------------------- Fields
 
     /**
@@ -181,14 +184,13 @@ public abstract class AbstractEndpoint<S,U> {
         return socketProperties;
     }
 
-    /**
-     * Thread used to accept new connections and pass them to worker threads.
-     */
+
+
+    // 监听端口，接收新的客户端连接
     protected Acceptor<U> acceptor;
 
-    /**
-     * Cache for SocketProcessor objects
-     */
+
+    //SocketProcessor缓存池
     protected SynchronizedStack<SocketProcessorBase<S>> processorCache;
 
     private ObjectName oname = null;
@@ -196,6 +198,7 @@ public abstract class AbstractEndpoint<S,U> {
     /**
      * Map holding all current connections keyed with the sockets.
      */
+    //存放着客户端连接的socket：key为socket，value为socket的包装对象
     protected Map<U, SocketWrapperBase<S>> connections = new ConcurrentHashMap<>();
 
     /**
@@ -533,9 +536,8 @@ public abstract class AbstractEndpoint<S,U> {
         return -1;
     }
 
-    /**
-     * External Executor based thread pool.
-     */
+
+    // ThreadPoolExecutor
     private Executor executor = null;
     public void setExecutor(Executor executor) {
         this.executor = executor;
@@ -650,9 +652,8 @@ public abstract class AbstractEndpoint<S,U> {
         return bindState;
     }
 
-    /**
-     * Keepalive timeout, if not set the soTimeout is used.
-     */
+
+    //keep-alive的超时时间，默认使用socket的连接超时时间
     private Integer keepAliveTimeout = null;
     public int getKeepAliveTimeout() {
         if (keepAliveTimeout == null) {
@@ -1141,17 +1142,13 @@ public abstract class AbstractEndpoint<S,U> {
 
     // ---------------------------------------------- Request processing methods
 
+
     /**
-     * Process the given SocketWrapper with the given status. Used to trigger
-     * processing as if the Poller (for those endpoints that have one)
-     * selected the socket.
-     *
-     * @param socketWrapper The socket wrapper to process
-     * @param event         The socket event to be processed
-     * @param dispatch      Should the processing be performed on a new
-     *                          container thread
-     *
-     * @return if processing was triggered successfully
+     * 对于特定的事件去处理当前的socket
+     * @param socketWrapper socket的包装类
+     * @param event 事件：读/写...
+     * @param dispatch 是否允许分发给线程池中的线程处理？ true - 允许
+     * @return 处理结果：true - 处理成功，false - 处理失败（发生异常或socket包装类不存在）
      */
     public boolean processSocket(SocketWrapperBase<S> socketWrapper,
             SocketEvent event, boolean dispatch) {
@@ -1161,19 +1158,22 @@ public abstract class AbstractEndpoint<S,U> {
             }
             SocketProcessorBase<S> sc = null;
             if (processorCache != null) {
+                //首先尝试从缓存中获取SocketProcessor（减少重复新建对象带来的消耗）
                 sc = processorCache.pop();
             }
             if (sc == null) {
-                //创建SocketProcessor（Runnable），携带SocketChannel进行后续处理
+                //缓存中没有则直接创建SocketProcessor（Runnable），携带SocketChannel进行后续处理
                 sc = createSocketProcessor(socketWrapper, event);
             } else {
                 //复用已有的SocketProcessor（Runnable），覆盖有原的SocketChannel
                 sc.reset(socketWrapper, event);
             }
 
-            //交给线程池处理
+            //并发处理每个socket...
             Executor executor = getExecutor();
             if (dispatch && executor != null) {
+                log.info(String.format("******执行任务：socketChannel[%s]",sc.socketWrapper.getSocket()));
+
                 executor.execute(sc);
             } else {
                 sc.run();
@@ -1192,6 +1192,12 @@ public abstract class AbstractEndpoint<S,U> {
     }
 
 
+    /**
+     * 创建具体的SocketProcessorBase
+     * @param socketWrapper socket包装类
+     * @param event 事件
+     * @return SocketProcessorBase具体实例对象
+     */
     protected abstract SocketProcessorBase<S> createSocketProcessor(
             SocketWrapperBase<S> socketWrapper, SocketEvent event);
 

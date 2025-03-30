@@ -17,8 +17,7 @@
 package javax.servlet.http;
 
 /**
- * Interface between the HTTP upgrade process and the new protocol.
- *
+ * HTTP升级过程和新协议之间的接口
  * @since Servlet 3.1
  */
 public interface HttpUpgradeHandler {

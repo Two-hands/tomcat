@@ -16,32 +16,35 @@
  */
 package javax.websocket;
 
+
+/**
+ * websocket端（服务端、客户端）需要实现对一个连接的生命周期管理
+ * ** 可以使用@ServerEndpoint + （@OnOpen、@OnClose、@OnError）注解配合 来代理这个接口的功能
+ */
 public abstract class Endpoint {
 
+
     /**
-     * Event that is triggered when a new session starts.
-     *
-     * @param session   The new session.
-     * @param config    The configuration with which the Endpoint was
-     *                  configured.
+     * 当有一个websocket新连接建立时触发
+     * @param session 为新websocket连接生成的session（用于保存通讯状态）
+     * @param config ??
      */
     public abstract void onOpen(Session session, EndpointConfig config);
 
+
     /**
-     * Event that is triggered when a session has closed.
-     *
-     * @param session       The session
-     * @param closeReason   Why the session was closed
+     * 当有一个websocket连接关闭时触发
+     * @param session 需要被关闭连接的session
+     * @param closeReason 关闭的原因
      */
     public void onClose(Session session, CloseReason closeReason) {
         // NO-OP by default
     }
 
     /**
-     * Event that is triggered when a protocol error occurs.
-     *
-     * @param session   The session.
-     * @param throwable The exception.
+     * 当有一个websocket连接处理过程中失败时触发
+     * @param session 发生异常的连接的session
+     * @param throwable 异常
      */
     public void onError(Session session, Throwable throwable) {
         // NO-OP by default

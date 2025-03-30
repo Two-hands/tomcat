@@ -16,10 +16,6 @@
  */
 package org.apache.tomcat.websocket.server;
 
-import java.io.EOFException;
-import java.io.IOException;
-import java.nio.ByteBuffer;
-
 import org.apache.coyote.http11.upgrade.UpgradeInfo;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
@@ -31,6 +27,10 @@ import org.apache.tomcat.websocket.Transformation;
 import org.apache.tomcat.websocket.WsFrameBase;
 import org.apache.tomcat.websocket.WsIOException;
 import org.apache.tomcat.websocket.WsSession;
+
+import java.io.EOFException;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 
 public class WsFrameServer extends WsFrameBase {
 
@@ -52,36 +52,41 @@ public class WsFrameServer extends WsFrameBase {
 
 
     /**
-     * Called when there is data in the ServletInputStream to process.
-     *
-     * @throws IOException if an I/O error occurs while processing the available
-     *                     data
+     *  当socket中输入流有数据时（客户端的请求数据），进行读取客户端请求数据....
      */
     private void onDataAvailable() throws IOException {
         if (log.isDebugEnabled()) {
             log.debug("wsFrameServer.onDataAvailable");
         }
+
+
         if (isOpen() && inputBuffer.hasRemaining() && !isSuspended()) {
             // There might be a data that was left in the buffer when
             // the read has been suspended.
             // Consume this data before reading from the socket.
+            //由于可能发生读取暂停，缓冲区中可能有还未处理完的客户端发送的数据，需要先处理完后再进行新的读取操作...
             processInputBuffer();
         }
 
+        //进行读取操作（读取客户端的请求数据）
         while (isOpen() && !isSuspended()) {
-            // Fill up the input buffer with as much data as we can
             inputBuffer.mark();
             inputBuffer.position(inputBuffer.limit()).limit(inputBuffer.capacity());
+            //从socket输入流中读取数据，若数据量大于缓冲区，循环读...
             int read = socketWrapper.read(false, inputBuffer);
             inputBuffer.limit(inputBuffer.position()).reset();
             if (read < 0) {
+                //读取错误...
                 throw new EOFException();
             } else if (read == 0) {
+                //没有读取到数据，直接终止返回...
                 return;
             }
             if (log.isDebugEnabled()) {
                 log.debug(sm.getString("wsFrameServer.bytesRead", Integer.toString(read)));
             }
+
+            //当前循环有读取到数据（inputBuffer有新数据...）
             processInputBuffer();
         }
     }
@@ -155,10 +160,12 @@ public class WsFrameServer extends WsFrameBase {
         while (isOpen()) {
             switch (getReadState()) {
             case WAITING:
+                //当前位"等待"状态，更改为"处理中"后开始读取客户端发送的数据
                 if (!changeReadState(ReadState.WAITING, ReadState.PROCESSING)) {
                     continue;
                 }
                 try {
+                    //读取客户端发送的数据
                     return doOnDataAvailable();
                 } catch (IOException e) {
                     changeReadState(ReadState.CLOSING);

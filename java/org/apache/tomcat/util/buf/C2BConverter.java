@@ -129,7 +129,7 @@ public final class C2BConverter {
      * @param bc byte output
      * @throws IOException An encoding error occurred
      */
-    public void convert(CharBuffer cc, ByteBuffer bc) throws IOException {
+        public void convert(CharBuffer cc, ByteBuffer bc) throws IOException {
         if ((bb == null) || (bb.array() != bc.array())) {
             // Create a new byte buffer if anything changed
             bb = ByteBuffer.wrap(bc.array(), bc.limit(), bc.capacity() - bc.limit());

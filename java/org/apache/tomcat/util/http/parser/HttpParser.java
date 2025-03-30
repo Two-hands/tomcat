@@ -16,10 +16,10 @@
  */
 package org.apache.tomcat.util.http.parser;
 
+import org.apache.tomcat.util.res.StringManager;
+
 import java.io.IOException;
 import java.io.Reader;
-
-import org.apache.tomcat.util.res.StringManager;
 
 /**
  * HTTP header value parser implementation. Parsing HTTP headers as per RFC2616
@@ -164,9 +164,9 @@ public class HttpParser {
 
 
     public boolean isNotRequestTargetRelaxed(int c) {
-        // Fast for valid request target characters, slower for some incorrect
-        // ones
         try {
+            //$%&'()*+,-./0-9:;=?@A-Z[]_a-z~
+            //字符c不在上述列表中则返回true
             return IS_NOT_REQUEST_TARGET[c];
         } catch (ArrayIndexOutOfBoundsException ex) {
             return true;
@@ -186,9 +186,9 @@ public class HttpParser {
 
 
     public boolean isQueryRelaxed(int c) {
-        // Fast for valid user info characters, slower for some incorrect
-        // ones
         try {
+            //!$%&'()*+,-./:;=?@~_0-9A-Za-z
+            //若字符c在上述列表中，返回true
             return IS_QUERY_RELAXED[c];
         } catch (ArrayIndexOutOfBoundsException ex) {
             return false;
@@ -228,8 +228,9 @@ public class HttpParser {
 
 
     public static boolean isToken(int c) {
-        // Fast for correct values, slower for incorrect ones
         try {
+            //  !#$%&'*+-.^_`|~0-9A-Za-z
+            //字符c在上述列表中则返回true
             return IS_TOKEN[c];
         } catch (ArrayIndexOutOfBoundsException ex) {
             return false;
@@ -282,9 +283,9 @@ public class HttpParser {
 
 
     public static boolean isHttpProtocol(int c) {
-        // Fast for valid HTTP protocol characters, slower for some incorrect
-        // ones
         try {
+            // ./0-9HPT
+            //字符c在上述列表中则返回true
             return IS_HTTP_PROTOCOL[c];
         } catch (ArrayIndexOutOfBoundsException ex) {
             return false;
@@ -347,9 +348,9 @@ public class HttpParser {
 
 
     public static boolean isControl(int c) {
-        // Fast for valid control characters, slower for some incorrect
-        // ones
         try {
+            // 0-31共32个控制字符，127 DEL控制字符
+            //字符c属于上述字符，返回true
             return IS_CONTROL[c];
         } catch (ArrayIndexOutOfBoundsException ex) {
             return false;

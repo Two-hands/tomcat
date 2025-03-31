@@ -138,36 +138,43 @@ public abstract class WsFrameBase {
     }
 
 
+    /**
+     * 处理inputBuffer缓冲区的数据
+     */
+
     protected void processInputBuffer() throws IOException {
         while (!isSuspended()) {
-            //更新session的最近读取时间...
+            //更新时间[更新session的最近修改时间为当前时间]
             wsSession.updateLastActiveRead();
 
-            //新的帧数据：
+            //处理新帧
             if (state == State.NEW_FRAME) {
-                //1、初始化这帧头（解析帧的前2个字节），校验合法性（含控制信息）
-                //这步成功会有：state=State.PARTIAL_HEADER;
+                //1、解析帧的头（前2个字节）的fin、rsv、opCode、mask、payload
                 if (!processInitialHeader()) {
+                    //缓冲区不够2个字节，终止解析
                     break;
                 }
 
-                //若关闭帧接收到后，后续的数据将不被处理...
+                //已经关闭，不再处理
                 if (!open) {
                     throw new IOException(sm.getString("wsFrame.closed"));
                 }
             }
 
-            //2、步骤1成功，开始解析帧头扩展部分，获取掩码和数据长度等信息
-            //这步成功会有：state=State.DATA
+            //2、获取帧头中的4个字节的掩码秘钥（有的话）、数据载荷值
             if (state == State.PARTIAL_HEADER) {
                 if (!processRemainingHeader()) {
+                    //缓冲区不够n个字节，终止解析
+                    //n = 4byte（服务端解析时需要帧含掩码） + payload（0byte，2byte,8byte）
                     break;
                 }
             }
 
-            //3、步骤2成功，开始解析消息数据（真正的消息）
+            //3、获取帧的真正的数据部分
             if (state == State.DATA) {
+                // processData() - 处理解析帧的数据，返回true - 帧解析完毕；false - 帧数据还未解析完，需要从socket缓冲区获取剩余数据
                 if (!processData()) {
+                    //inputBuffer缓冲区数据已空，终止当前处理，再次从socket缓冲区接收数据到inputBuffer
                     break;
                 }
             }
@@ -180,20 +187,24 @@ public abstract class WsFrameBase {
      * @return 解析后是否需要进行后续的帧头解析？true - 是，false - 终止解析
      */
     private boolean processInitialHeader() throws IOException {
-        // 至少有2个字节...
+        //处理帧的头部至少需要2个字节
         if (inputBuffer.remaining() < 2) {
             return false;
         }
+
+        //解析第一个字节：
         int b = inputBuffer.get();
-        //第一个字节：
-        // fin - 结束标志(占1位[x0000000]），1表示当前为消息的最后一帧，0表示消息解析未结束（后面还有数据未到...）
+        // fin - 结束标志，占1位 [b & 1000 0000]
+        //    - 0 当前帧只有部分数据
+        //    - 1 当前帧包含完整数据
         fin = (b & 0x80) != 0;
-        // rsv（rsv1、rsv2、rsv3） - 保留位置作用（占3位[0xxx0000]）
+        // rsv（rsv1、rsv2、rsv3） - 保留位，占3位 [b & 0111 0000]
         rsv = (b & 0x70) >>> 4;
-        // opCode - 帧类型（占4位[0000xxxx]）：
-        //               延续(0)，文本(1)，二进制(2)，连接关闭(8)，心跳[ping](9)，心跳响应[pong](10)
+        // opCode - 帧的类型，占4位 [b & 0000 1111]
+        //        - 类型枚举：延续(0)，文本(1)，二进制(2)，连接关闭(8)，心跳[ping](9)，心跳响应[pong](10)
         opCode = (byte) (b & 0x0F);
 
+        //rsv的值必须为0
         if (!transformation.validateRsv(rsv, opCode)) {
             throw new WsIOException(new CloseReason(
                     CloseCodes.PROTOCOL_ERROR,
@@ -201,16 +212,15 @@ public abstract class WsFrameBase {
         }
 
         if (Util.isControl(opCode)) {
-            // 控制帧，此时：opCode>=8
+            // 控制帧，此时：opCode >= 8 [连接关闭(8)，心跳[ping](9)，心跳响应[pong](10)]
             if (!fin) {
-                //不是最后一帧，而当前帧为：关闭连接、心跳、心跳响应
-                // 这种情况不需要分段处理（一个帧即可）
+                //控制帧必须是一个完整的帧，不能分割
                 throw new WsIOException(new CloseReason(
                         CloseCodes.PROTOCOL_ERROR,
                         sm.getString("wsFrame.controlFragmented")));
             }
-            //opCode>=8时，目前只有3种情况：连接关闭(8)，心跳[ping](9)，心跳响应[pong](10)
-            //若不是这三种情况，则opCode非法...
+
+            //当前控制帧当前只支持：连接关闭(8)，心跳[ping](9)，心跳响应[pong](10)
             if (opCode != Constants.OPCODE_PING &&
                     opCode != Constants.OPCODE_PONG &&
                     opCode != Constants.OPCODE_CLOSE) {
@@ -219,10 +229,9 @@ public abstract class WsFrameBase {
                         sm.getString("wsFrame.invalidOpCode", Integer.valueOf(opCode))));
             }
         } else {
-            // 当opCode < 8时，目前只有3种情况：延续(0)，文本(1)，二进制(2)
+            //数据帧，此时：opCode < 8 [延续(0)，文本(1)，二进制(2)]
             if (continuationExpected) {
-                //当前帧的数据不完整，还要接收后续的帧（要分段...）
-                //若预测到当前帧是分段帧（continuationExpected=true），但opCode!=0,则为异常
+                //当前帧为连续帧[延续(0)]，帧数据的数据类型（二进制/文本）由第一个帧指定
                 if (!Util.isContinuation(opCode)) {
                     throw new WsIOException(new CloseReason(
                             CloseCodes.PROTOCOL_ERROR,
@@ -230,10 +239,13 @@ public abstract class WsFrameBase {
                 }
             } else {
                 try {
-                    //到这里只有文本(1)，二进制(2)两种合法操作：
+                    //当前帧不是连续帧，或者当前帧是连续帧的首帧
+                    // 数据类型：文本(1)，二进制(2)
                     if (opCode == Constants.OPCODE_BINARY) {
-                        //帧中内容为二进制数据：
+                        //帧携带的数据是二进制帧
                         textMessage = false;
+
+                        //开辟缓冲区，获取二进制消息处理器
                         int size = wsSession.getMaxBinaryMessageBufferSize();
                         if (size != messageBufferBinary.capacity()) {
                             messageBufferBinary = ByteBuffer.allocate(size);
@@ -241,8 +253,10 @@ public abstract class WsFrameBase {
                         binaryMsgHandler = wsSession.getBinaryMessageHandler();
                         textMsgHandler = null;
                     } else if (opCode == Constants.OPCODE_TEXT) {
-                        //帧中内容为文本数据
+                        //帧携带的数据是文本帧
                         textMessage = true;
+
+                        //开辟缓冲区，获取文本消息处理器
                         int size = wsSession.getMaxTextMessageBufferSize();
                         if (size != messageBufferText.capacity()) {
                             messageBufferText = CharBuffer.allocate(size);
@@ -250,39 +264,40 @@ public abstract class WsFrameBase {
                         binaryMsgHandler = null;
                         textMsgHandler = wsSession.getTextMessageHandler();
                     } else {
-                        //非法opCode
+                        // 无效opCode值
                         throw new WsIOException(new CloseReason(
                                 CloseCodes.PROTOCOL_ERROR,
                                 sm.getString("wsFrame.invalidOpCode", Integer.valueOf(opCode))));
                     }
                 } catch (IllegalStateException ise) {
-                    // Thrown if the session is already closed
                     throw new WsIOException(new CloseReason(
                             CloseCodes.PROTOCOL_ERROR,
                             sm.getString("wsFrame.sessionClosed")));
                 }
             }
 
-            //如果未发现结束符，则还需要等待剩余的数据到来
+            //标记是否为连续帧？fin=false时表示为帧数据未结束
+            // continuationExpected=true 数据被分散在多个帧中
             continuationExpected = !fin;
         }
 
-
+        //解析第二个字节：
         b = inputBuffer.get();
-        //第2个字节：
-        //mask - 计算掩码（占1位[x0000000]）值为0-127
-        //isMasked - client端解析时为false，server端解析为true
+        // mask - 是否含计算掩码，占1位[b & 1000 0000]值为0-127
+        //      0 - 不含
+        //      1 - 帧含有4个字节的计算掩码
+        //isMasked - client端解析时为false，server端解析时为true，即客户端发送的帧计算掩码必须是1
         if ((b & 0x80) == 0 && isMasked()) {
-            //当掩码位为0时，server端解析（client端数据必须带计算掩码）报错...
+            //客户端发送的帧，其mask位必须是1
             throw new WsIOException(new CloseReason(
                     CloseCodes.PROTOCOL_ERROR,
                     sm.getString("wsFrame.notMasked")));
         }
 
-        // payload length - 数据长度（占7位[0xxxxxxx]）
+        // payload - 帧数据的有效载荷（真正的数据部分的长度），帧7位[b & 0111 1111]
         payloadLength = b & 0x7F;
 
-        //标记当前处理状态为"请求头"解析阶段
+        //标记帧头的2个字节信息已经解析完成
         state = State.PARTIAL_HEADER;
         if (getLog().isDebugEnabled()) {
             getLog().debug(sm.getString("wsFrame.partialHeaderComplete", Boolean.toString(fin),
@@ -297,51 +312,49 @@ public abstract class WsFrameBase {
 
 
     /**
-     * @return <code>true</code> if sufficient data was present to complete the
-     *         processing of the header
-     */
-
-    /**
-     * 解析帧头扩展部分：掩码、消息数据长度
+     * 解析帧头扩展部分：掩码秘钥、消息数据长度
      * @return 解析是否完成，可以进行后续的消息数据？ true - 完成，进行后续消息解析；false - 数据不完整，终止
      */
     private boolean processRemainingHeader() throws IOException {
-        // Ignore the 2 bytes already read. 4 for the mask
+        //需要忽略帧的前2个字节（已经读取完） + 4个字节（客户端发送的帧需要携带掩码秘钥）
         int headerLength;
 
-        //mark - 掩码（占4个字节），客户端发送给服务端的需要掩码，服务端发生给客户端不需要
+        //marking-key  - 掩码秘钥，占4个字节（客户端发送给服务端的帧需要携带掩码。对帧携带的真正数据进行XOR掩码操作）
         if (isMasked()) {
+            //客户端端发送的帧，需要掩码秘钥
             headerLength = 4;
         } else {
+            //服务端发送的帧，不需要掩码秘钥
             headerLength = 0;
         }
 
-        //payload length - 报文消息数据长度
-        //  1、 payload length < 126时，值为当前的报文数据长度
-        //  2、 payload length = 126时，紧接着的后2个字节的值为报文数据长度
-        //  3、 payload length = 127时，紧接着的后8个字节的值为报文数据长度
+        //payload - 帧数据的有效载荷（真正的数据部分的长度）
+        //  1、 payload length < 126时，payloadLength值为当前的报文数据长度
+        //  2、 payload length = 126时，payloadLength紧接着的后2个字节的值为报文数据长度
+        //  3、 payload length = 127时，payloadLength紧接着的后8个字节的值为报文数据长度
         if (payloadLength == 126) {
             headerLength += 2;
         } else if (payloadLength == 127) {
             headerLength += 8;
         }
 
-        //当前缓存区字节数不够，返回，不进行解析...
+        //缓冲区字节数不够
         if (inputBuffer.remaining() < headerLength) {
             return false;
         }
 
-        // Calculate new payload length if necessary
+        //获取有效数据载荷的具体数值
         if (payloadLength == 126) {
-            //将payload length的后续2个字节的数据转换为long
+            //读取帧的头2个字节后紧跟着的2个字节
             payloadLength = byteArrayToLong(inputBuffer.array(),
                     inputBuffer.arrayOffset() + inputBuffer.position(), 2);
             inputBuffer.position(inputBuffer.position() + 2);
         } else if (payloadLength == 127) {
-            //将payload length的后续8个字节的数据转换为long
+            //读取帧的头2个字节后紧跟着的4个字节
             payloadLength = byteArrayToLong(inputBuffer.array(),
                     inputBuffer.arrayOffset() + inputBuffer.position(), 8);
-            // 这8个字节的最高位必须是0（若是1则为负数，这是不允许的）
+
+            //值必须是非负数
             if (payloadLength < 0) {
                 throw new WsIOException(
                         new CloseReason(CloseCodes.PROTOCOL_ERROR, sm.getString("wsFrame.payloadMsbInvalid")));
@@ -351,22 +364,27 @@ public abstract class WsFrameBase {
 
 
         if (Util.isControl(opCode)) {
-            //分段帧校验
+            //控制帧，不能携带过多数据
             if (payloadLength > 125) {
                 throw new WsIOException(new CloseReason(
                         CloseCodes.PROTOCOL_ERROR,
                         sm.getString("wsFrame.controlPayloadTooBig", Long.valueOf(payloadLength))));
             }
+
             if (!fin) {
+                //控制帧只能是单个帧
                 throw new WsIOException(new CloseReason(
                         CloseCodes.PROTOCOL_ERROR,
                         sm.getString("wsFrame.controlNoFin")));
             }
         }
 
+        //获4个字节的取掩码秘钥（在帧的头2个字节 + 后payload所占的字节后面）
         if (isMasked()) {
             inputBuffer.get(mask, 0, 4);
         }
+
+        //帧头已经解析完，准备解析帧的数据部分
         state = State.DATA;
         return true;
     }
@@ -375,23 +393,22 @@ public abstract class WsFrameBase {
     private boolean processData() throws IOException {
         boolean result;
         if (Util.isControl(opCode)) {
+            //处理控制帧，如：关闭、Ping、Pong
             result = processDataControl();
         } else if (textMessage) {
-            //消息数据为文本类型：
+            //帧的数据类型为文本
             if (textMsgHandler == null) {
-                //textMsgHandler == null 当前帧的文本数据还未读取完
                 result = swallowInput();
             } else {
-                //处理当前帧的数据，编码为文本
+                //处理文本帧数据
                 result = processDataText();
             }
         } else {
-            //消息数据为二进制类型：
+            //帧的数据类型为二进制
             if (binaryMsgHandler == null) {
-                //binaryMsgHandler == null 当前帧的二进制数据还未读取完
                 result = swallowInput();
             } else {
-                //处理当前帧的数据，二进制数据（图片？....）
+                //处理二进制帧
                 result = processDataBinary();
             }
         }
@@ -434,6 +451,7 @@ public abstract class WsFrameBase {
                         sm.getString("wsFrame.oneByteCloseCode")));
             }
             if (controlBufferBinary.remaining() > 1) {
+                //获取控制帧的数据部分，解码
                 code = controlBufferBinary.getShort();
                 if (controlBufferBinary.remaining() > 0) {
                     CoderResult cr = utf8DecoderControl.decode(controlBufferBinary,
@@ -445,13 +463,12 @@ public abstract class WsFrameBase {
                                 CloseCodes.PROTOCOL_ERROR,
                                 sm.getString("wsFrame.invalidUtf8Close")));
                     }
-                    // There will be no overflow as the output buffer is big
-                    // enough. There will be no underflow as all the data is
-                    // passed to the decoder in a single call.
                     controlBufferText.flip();
+                    //解码结果，关闭原因
                     reason = controlBufferText.toString();
                 }
             }
+            //关闭当前websocket连接，调用wsServer.onClose，传递关闭原因
             wsSession.onClose(new CloseReason(Util.getCloseCode(code), reason));
         } else if (opCode == Constants.OPCODE_PING) {
             if (wsSession.isOpen()) {
@@ -510,28 +527,35 @@ public abstract class WsFrameBase {
     }
 
 
+    /**
+     * 解析当前帧的数据，将其转为文本
+     * @return 当前帧是否解析完毕？ true - 解析完毕， false - 解析未完成，需要继续从socket缓冲区拿数据
+     */
     private boolean processDataText() throws IOException {
-        // 从输入缓冲区中获取数据，将其存放到字节缓冲区（messageBufferBinary）中：
-        // TransformationResult.UNDERFLOW - 输入缓冲区数据已读取完（帧数据还未读取完，等待）
-        // TransformationResult.UNDERFLOW - 字节缓冲区已满，刷新后继续编码
-        // TransformationResult.END_OF_FRAME - 帧数据已读取完毕
+        // 将inputBuffer缓冲区数据通过mask解码后放入messageBufferBinary缓冲区，会出现3中情况：
+        //    1、TransformationResult.END_OF_FRAME  —— 当前帧数据读取完成
+        //    2、TransformationResult.UNDERFLOW     —— 源inputBuffer缓冲区没有可读数据[帧数据还未读完，需要等待更多的数据]
+        //    3、TransformationResult.OVERFLOW      —— 目标messageBufferBinary缓冲区空间已满[需要将数据编码消耗后再获取数据]
         TransformationResult tr = transformation.getMoreData(opCode, fin, rsv, messageBufferBinary);
 
-        //还没读取完所有数据，循环....
+
+        //当前帧数据未读完，会进入当前循环
         while (!TransformationResult.END_OF_FRAME.equals(tr)) {
-            //模式切换，开始从此缓冲区中获取已存放的数据
+            //切换为写模式
             messageBufferBinary.flip();
             while (true) {
-                //使用utf-8字符集进行数据解码，将字节数据（messageBufferBinary）转换为文本数据（messageBufferText）
+                //数据解码[从messageBufferBinary拿出二进制数据解码成文本后放入messageBufferText]
                 CoderResult cr = utf8DecoderMessage.decode(messageBufferBinary, messageBufferText,
                         false);
 
                 if (cr.isError()) {
+                    //解码错误
                     throw new WsIOException(new CloseReason(
                             CloseCodes.NOT_CONSISTENT,
                             sm.getString("wsFrame.invalidUtf8")));
                 } else if (cr.isOverflow()) {
-                    // 字符缓冲器没有可用空间，刷新其中的数据
+                    // 文本缓冲区messageBufferText已满，发送[清空]后再循环解码
+                    // usePartial - 是否可以发送部分数据？默认不允许
                     if (usePartial()) {
                         messageBufferText.flip();
                         sendMessageText(false);
@@ -542,23 +566,26 @@ public abstract class WsFrameBase {
                                 sm.getString("wsFrame.textMessageTooBig")));
                     }
                 } else if (cr.isUnderflow()) {
-                    // Compact what we have to create as much space as possible
-                    //没有可读数据，压缩以获取更多可用空间
+                    //缓冲区messageBufferText未满，但缓冲区messageBufferBinary已空[需要再次从inputBuffer中获取数据]
                     messageBufferBinary.compact();
 
                     if (TransformationResult.OVERFLOW.equals(tr)) {
-                        //messageBufferBinary还可以存放数据（从inputBuffer中读取），结束循环，继续填充数据
+                        //上次读取时缓冲区messageBufferBinary已满，但inputBuffer缓冲区可能还有数据
+                        //终止循环解码，再次从inputBuffer中拿数据
                         break;
                     } else {
-                        // messageBufferBinary有足够空间，但当前inputBuffer中数据还不完整，退出等待数据的到来....
+                        // inputBuffer、messageBufferBinary缓冲区都已空
+                        // 可能socket接收缓冲区还有数据，终止文本数据处理，再次尝试从socket接收缓冲区读取数据到inputBuffer缓冲区
                         return false;
                     }
                 }
             }
-            // 继续读取数据到messageBufferBinary中
+            // 继续从inputBuffer缓冲区拿数据，放入messageBufferBinary缓冲区
             tr = transformation.getMoreData(opCode, fin, rsv, messageBufferBinary);
         }
 
+
+        //到这里，说明已经读到最后的完整数据
         messageBufferBinary.flip();
         boolean last = false;
 
@@ -582,11 +609,9 @@ public abstract class WsFrameBase {
                             sm.getString("wsFrame.textMessageTooBig")));
                 }
             } else if (cr.isUnderflow() && !last) {
-                // End of frame and possible message as well.
-
+                //当前帧的数据已经解析完毕
                 if (continuationExpected) {
-                    // If partial messages are supported, send what we have
-                    // managed to decode
+                    //但当前帧的数据不完整[数据在多个帧上]
                     if (usePartial()) {
                         messageBufferText.flip();
                         sendMessageText(false);
@@ -594,18 +619,21 @@ public abstract class WsFrameBase {
                     }
                     messageBufferBinary.compact();
                     newFrame();
-                    // Process next frame
+                    //当前帧处理完成，等待下一个帧的数据
                     return true;
                 } else {
-                    // Make sure coder has flushed all output
+                    //当前帧是完整的数据
                     last = true;
                 }
             } else {
-                // End of message
+                //当前帧读取解码完毕，发送消息给wsServer
                 messageBufferText.flip();
-                sendMessageText(true);
 
+                //** 发送帧的完整数据到wsServer.onMessage
+                sendMessageText(true);
+                //初始消息格式，等待下一个帧数据到来
                 newMessage();
+                //当前帧数据完整到达，解析完毕
                 return true;
             }
         }
@@ -1111,8 +1139,8 @@ public abstract class WsFrameBase {
                 ByteBuffer dest) {
 
             // payloadWritten < payloadLength - 帧中的数据还未读取完
-            // inputBuffer.remaining() > 0 - 输入缓冲区中还有消息数据未读
-            // dest.hasRemaining() - 还可以存储谁
+            // inputBuffer.remaining() > 0 - 缓冲区中还有数据可以读取
+            // dest.hasRemaining() - 目标缓冲区还可以放数据
             while (payloadWritten < payloadLength && inputBuffer.remaining() > 0 &&
                     dest.hasRemaining()) {
                 //按掩码解密，将每个字节数据轮训与4个字节的掩码进行按位异或
@@ -1124,14 +1152,16 @@ public abstract class WsFrameBase {
                 payloadWritten++;
                 dest.put(b);
             }
+
+            //循环结束：
             if (payloadWritten == payloadLength) {
-                //当前帧的数据读取完毕
+                //1、当前帧的数据读取完毕
                 return TransformationResult.END_OF_FRAME;
             } else if (inputBuffer.remaining() == 0) {
-                //输入缓冲区没有可读数据，需要再次从socket中获取数据
+                //2、缓冲区没有可读数据（可能还需要从socket接收缓冲区获取更多的数据）
                 return TransformationResult.UNDERFLOW;
             } else {
-                // dest没有空间存放数据，需要使用数据、释放数据后再次存放
+                // 目标缓冲区已满，需要将缓冲区数据使用后再读取
                 return TransformationResult.OVERFLOW;
             }
         }

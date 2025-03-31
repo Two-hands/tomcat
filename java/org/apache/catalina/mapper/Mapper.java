@@ -680,7 +680,7 @@ public final class Mapper {
      */
     public void map(MessageBytes host, MessageBytes uri, String version,
                     MappingData mappingData) throws IOException {
-
+        //若请求头中未指定host，使用Engine的默认主机
         if (host.isNull()) {
             String defaultHostName = this.defaultHostName;
             if (defaultHostName == null) {
@@ -688,6 +688,8 @@ public final class Mapper {
             }
             host.getCharChunk().append(defaultHostName);
         }
+
+        //通过请求中携带的host、URI信息找到具体处理该请求的Host、Context、Wrapper、Servlet
         host.toChars();
         uri.toChars();
         internalMap(host.getCharChunk(), uri.getCharChunk(), version, mappingData);
@@ -729,24 +731,17 @@ public final class Mapper {
             String version, MappingData mappingData) throws IOException {
 
         if (mappingData.host != null) {
-            // The legacy code (dating down at least to Tomcat 4.1) just
-            // skipped all mapping work in this case. That behaviour has a risk
-            // of returning an inconsistent result.
-            // I do not see a valid use case for it.
             throw new AssertionError();
         }
 
-        //1、通过解析请求行或请求头得到的host去Mapper.hosts中寻找匹配的虚拟主机（设置mappingData.host）
-        //确定mappedHost
+
+        //根据host匹配到Host
         MappedHost[] hosts = this.hosts;
-
-        //获取host映射...
+        //1、尝试精确匹配，从Hosts中找到匹配的Host（根据host与MappedHost.name比较）
         MappedHost mappedHost = exactFindIgnoreCase(hosts, host);
-
-        //虚拟主机匹配失败，尝试使用默认虚拟主机（如果有默认虚拟主机时）
         if (mappedHost == null) {
-            // Note: Internally, the Mapper does not use the leading * on a
-            //       wildcard host. This is to allow this shortcut.
+            //2、精确匹配失败，尝试用其父域名（有的话）匹配到Host
+            // aa.bb.com -> 找其父域名.bb.com
             int firstDot = host.indexOf('.');
             if (firstDot > -1) {
                 int offset = host.getOffset();
@@ -754,10 +749,11 @@ public final class Mapper {
                     host.setOffset(firstDot + offset);
                     mappedHost = exactFindIgnoreCase(hosts, host);
                 } finally {
-                    // Make absolutely sure this gets reset
                     host.setOffset(offset);
                 }
             }
+
+            //3、匹配失败，使用默认Host（有的话）
             if (mappedHost == null) {
                 mappedHost = defaultHost;
                 if (mappedHost == null) {
@@ -765,20 +761,20 @@ public final class Mapper {
                 }
             }
         }
+
         mappingData.host = mappedHost.object;
 
+        //需要用URI匹配Context和Wrapper
         if (uri.isNull()) {
-            // Can't map context or wrapper without a uri
             return;
         }
 
         uri.setLimit(-1);
 
-        // 2、通过解析请求行中的URI去已匹配的虚拟主机下面的mappedHost.contextList中寻找匹配WEB应用上下文（设置mappingData.contextPath）
-        //确定context
+        //根据URI匹配Context
         ContextList contextList = mappedHost.contextList;
         MappedContext[] contexts = contextList.contexts;
-        // 获取WEB应用映射...
+        //尝试根据uri匹配，找到Context（根据uri与MappedContext.name进行比较）
         int pos = find(contexts, uri);
         if (pos == -1) {
             return;
@@ -845,7 +841,7 @@ public final class Mapper {
         mappingData.context = contextVersion.object;
         mappingData.contextSlashCount = contextVersion.slashCount;
 
-        // 3、通过解析请求行中的URI去已匹配的context中寻找匹配剩下URI的Wrapper[含Servlet]（设置mappingData.wrapperPath）
+        // 通用URI剩余部分匹配，找到Wrapper
         if (!contextVersion.isPaused()) {
             internalMapWrapper(contextVersion, uri, mappingData);
         }

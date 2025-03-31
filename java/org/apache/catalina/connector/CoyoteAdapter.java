@@ -577,15 +577,12 @@ public class CoyoteAdapter implements Adapter {
     protected boolean postParseRequest(org.apache.coyote.Request req, Request request,
             org.apache.coyote.Response res, Response response) throws IOException, ServletException {
 
-        // If the processor has set the scheme (AJP does this, HTTP does this if
-        // SSL is enabled) use this to set the secure flag as well. If the
-        // processor hasn't set it, use the settings from the connector
         if (req.scheme().isNull()) {
-            //没有解析到schema，默认赋予schema的值为http
+            //使用connector的默认值 schema=http，非SSL
             req.scheme().setString(connector.getScheme());
             request.setSecure(connector.getSecure());
         } else {
-            // Use processor specified scheme to determine secure state
+            //processor有指定，使用processor的值
             request.setSecure(req.scheme().equals("https"));
         }
 
@@ -630,7 +627,9 @@ public class CoyoteAdapter implements Adapter {
         MessageBytes decodedURI = req.decodedURI();
 
         if (undecodedURI.getType() == MessageBytes.T_BYTES) {
-            // Copy the raw URI to the decodedURI
+            //复制原始的URI值：
+            //  原始URI值：undecodedURI
+            //  复制的新URI值：decodedURI
             decodedURI.duplicate(undecodedURI);
 
             // Parse (and strip out) the path parameters
@@ -675,7 +674,7 @@ public class CoyoteAdapter implements Adapter {
             }
         }
 
-        // Request mapping.
+        //请求主机（通常请求头含有host对应的主机信息）
         MessageBytes serverName;
         if (connector.getUseIPVHosts()) {
             serverName = req.localName();
@@ -727,7 +726,7 @@ public class CoyoteAdapter implements Adapter {
             if (request.getServletContext().getEffectiveSessionTrackingModes()
                     .contains(SessionTrackingMode.URL)) {
 
-               //1、先从请求参数中获取指定参数名称的值（默认为jsessionid）为session id
+               //1、先从路径参数中获取sessionID值（默认为jsessionid）为session id
                 sessionID = request.getPathParameter(
                         SessionConfig.getSessionUriParamName(
                                 request.getContext()));
@@ -739,7 +738,8 @@ public class CoyoteAdapter implements Adapter {
 
 
             try {
-                //2、若未从请求参数中获取到session id，则尝试从请求头中解析Cookies，获取指定的Cookie名（默认为JSESSIONID）对应的值为session id
+                //2、解析请求头中header的name值为Cookie的k-v（Cookie可能有多个值），
+                //通过从Cookie中找到session id（通常通过获取Cookie中的JSESSIONID对应的值作为session id）
                 parseSessionCookiesId(request);
             } catch (IllegalArgumentException e) {
                 // Too many cookies
@@ -1043,26 +1043,29 @@ public class CoyoteAdapter implements Adapter {
             return;
         }
 
-        // 解析Cookies，获取session id（请求头中含Cookie的值）
+        // 解析请求头的Cookie，获取所有Cookie的值，多个值用分号隔开（如：Cookie:JSESSIONID=xxx;k=v）
         ServerCookies serverCookies = request.getServerCookies();
         int count = serverCookies.getCookieCount();
         if (count <= 0) {
             return;
         }
 
-        //获取Cookies中session id的标识，默认为JSESSIONID
+
+        //从当前Context中获取session id的标识（可配置，默认是JSESSIONID）
         String sessionCookieName = SessionConfig.getSessionCookieName(context);
 
-        //从解析的Cookies中获取key为JSESSIONID的value，并设置到request中
+        //从Cookie的多个k-v中找到k=sessionCookieName（默认值为JSESSIONID）对应的值（这个值就是session id）
+        //将session id值赋予给request#setRequestedSessionCookie
         for (int i = 0; i < count; i++) {
             ServerCookie scookie = serverCookies.getCookie(i);
             if (scookie.getName().equals(sessionCookieName)) {
-                // Override anything requested in the URL
+                //从Cookie中找到session id
                 if (!request.isRequestedSessionIdFromCookie()) {
-                    // Accept only the first session id cookie
+                    //只接受第一个从Cookie中找到的session id
                     convertMB(scookie.getValue());
                     request.setRequestedSessionId
                         (scookie.getValue().toString());
+                    //标识已经从Cookie中找到了session id
                     request.setRequestedSessionCookie(true);
                     request.setRequestedSessionURL(false);
                     if (log.isDebugEnabled()) {
@@ -1071,7 +1074,7 @@ public class CoyoteAdapter implements Adapter {
                     }
                 } else {
                     if (!request.isRequestedSessionIdValid()) {
-                        // Replace the session id until one is valid
+                        //若原session id失效，替换
                         convertMB(scookie.getValue());
                         request.setRequestedSessionId
                             (scookie.getValue().toString());

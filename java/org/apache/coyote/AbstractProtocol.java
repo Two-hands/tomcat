@@ -800,7 +800,6 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                     (processor == null ||
                     !processor.isAsync() && !processor.isUpgrade() ||
                     processor.isAsync() && !processor.checkAsyncTimeoutGeneration())) {
-                // This is effectively a NO-OP
                 return SocketState.OPEN;
             }
 
@@ -809,8 +808,8 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                 //等待后续请求数据处理完成后可能会继续将其放入waitingProcessors中，如此循环
                 getProtocol().removeWaitingProcessor(processor);
             } else if (status == SocketEvent.DISCONNECT || status == SocketEvent.ERROR) {
-                // Nothing to do. Endpoint requested a close and there is no
-                // longer a processor associated with this socket.
+                //socket请求需要关闭，不再处理
+                //  SocketEvent.ERROR - 可能是socket读写超时
                 return SocketState.CLOSED;
             }
 
@@ -905,10 +904,10 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                             }
                         } else {
                             HttpUpgradeHandler httpUpgradeHandler = upgradeToken.getHttpUpgradeHandler();
-                            //回收释放当前Http11的处理器
+                            //释放当前HTTP的processor
                             release(processor);
 
-                            //创建处理升级协议的处理器（如websocket、HTTP2），开始处理升级协议连接...
+                            //创建升级processor，如websocket
                             processor = getProtocol().createUpgradeProcessor(wrapper, upgradeToken);
                             if (getLog().isDebugEnabled()) {
                                 getLog().debug(sm.getString("abstractConnectionHandler.upgradeCreate",
@@ -918,7 +917,6 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                             //调用HttpUpgradeHandler#init方法：初始化新建的升级处理器（processor）：
                             // websocket：1、完成连接初始化（新建WsRemoteEndpointImplServer、WsSession、WsFrameServer实例）
                             //            2、调用ServerEndpoint#onOpen，将WsSession放入WsServerContainer中
-                            // http2：???
                             if (upgradeToken.getInstanceManager() == null) {
                                 httpUpgradeHandler.init((WebConnection) processor);
                             } else {
@@ -980,7 +978,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                     // The resumeProcessing() method will add this socket
                     // to the poller.
                 } else {
-                    //当前请求socket连接需要关闭
+                    //当前socket需要关闭：释放其关联的资源
                     if (processor != null && processor.isUpgrade()) {
                         //如果是升级后的处理器，销毁其httpUpgradeHandler
                         UpgradeToken upgradeToken = processor.getUpgradeToken();

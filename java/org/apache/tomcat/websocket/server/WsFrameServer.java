@@ -61,32 +61,31 @@ public class WsFrameServer extends WsFrameBase {
 
 
         if (isOpen() && inputBuffer.hasRemaining() && !isSuspended()) {
-            // There might be a data that was left in the buffer when
-            // the read has been suspended.
-            // Consume this data before reading from the socket.
-            //由于可能发生读取暂停，缓冲区中可能有还未处理完的客户端发送的数据，需要先处理完后再进行新的读取操作...
+            //当前inputBuffer可能还有为读的数据（由于read操作被挂起）
+            //继续处理剩余的数据
             processInputBuffer();
         }
 
-        //进行读取操作（读取客户端的请求数据）
+        //循环读取和处理数据
         while (isOpen() && !isSuspended()) {
             inputBuffer.mark();
             inputBuffer.position(inputBuffer.limit()).limit(inputBuffer.capacity());
-            //从socket输入流中读取数据，若数据量大于缓冲区，循环读...
+
+            //1、循环从socket接收缓冲区中读取数据到inputBuffer缓冲区中
             int read = socketWrapper.read(false, inputBuffer);
             inputBuffer.limit(inputBuffer.position()).reset();
             if (read < 0) {
-                //读取错误...
+                //读取错误
                 throw new EOFException();
             } else if (read == 0) {
-                //没有读取到数据，直接终止返回...
+                //无数据，直接返回
                 return;
             }
             if (log.isDebugEnabled()) {
                 log.debug(sm.getString("wsFrameServer.bytesRead", Integer.toString(read)));
             }
 
-            //当前循环有读取到数据（inputBuffer有新数据...）
+            //2、处理数据
             processInputBuffer();
         }
     }
@@ -160,7 +159,7 @@ public class WsFrameServer extends WsFrameBase {
         while (isOpen()) {
             switch (getReadState()) {
             case WAITING:
-                //当前位"等待"状态，更改为"处理中"后开始读取客户端发送的数据
+                //将"等待"状态改为"处理"状态后再处理数据
                 if (!changeReadState(ReadState.WAITING, ReadState.PROCESSING)) {
                     continue;
                 }
@@ -187,7 +186,11 @@ public class WsFrameServer extends WsFrameBase {
 
 
     private SocketState doOnDataAvailable() throws IOException {
+
+        //处理客户端发送的数据
         onDataAvailable();
+
+
         while (isOpen()) {
             switch (getReadState()) {
             case PROCESSING:

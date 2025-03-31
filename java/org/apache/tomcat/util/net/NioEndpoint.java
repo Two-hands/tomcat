@@ -820,11 +820,11 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                     NioSocketWrapper socketWrapper = (NioSocketWrapper) sk.attachment();
 
                     if (socketWrapper != null) {
-                        //处理触发注册事件的socket
                         log.info(String.format("******发生「%s」事件,socketChannel[%s]",
                             sk.readyOps() == SelectionKey.OP_READ ? "READ" : (sk.readyOps() == SelectionKey.OP_WRITE)
                                 ? "WRITE" : (sk.readyOps() == SelectionKey.OP_CONNECT) ? "CONNECT" : "ACCEPT",
                             socketWrapper.getSocket().sc));
+                        //处理触发注册事件的socket
                         processKey(sk, socketWrapper);
                     }
                 }
@@ -861,7 +861,9 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                                         socketWrapper.readBlocking = false;
                                         socketWrapper.readLock.notify();
                                     }
-                                } else if (!processSocket(socketWrapper, SocketEvent.OPEN_READ, true)) {
+                                }
+                                //处理读事件
+                                else if (!processSocket(socketWrapper, SocketEvent.OPEN_READ, true)) {
                                     //处理socket读事件失败
                                     closeSocket = true;
                                 }
@@ -876,7 +878,9 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                                         socketWrapper.writeBlocking = false;
                                         socketWrapper.writeLock.notify();
                                     }
-                                } else if (!processSocket(socketWrapper, SocketEvent.OPEN_WRITE, true)) {
+                                }
+                                //处理写事件
+                                else if (!processSocket(socketWrapper, SocketEvent.OPEN_WRITE, true)) {
                                     //处理socket写事件失败
                                     closeSocket = true;
                                 }
